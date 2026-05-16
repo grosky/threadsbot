@@ -24,6 +24,8 @@ from database import (
 from gemini_service import generate_posts
 from prompts import FORMAT_OPTIONS
 
+from .threads_connect import publish_button, remember_post
+
 router = Router()
 log = logging.getLogger(__name__)
 
@@ -177,11 +179,18 @@ async def _do_generate(
     await log_generation(user_id, format_name, topic)
     await status_msg.delete()
 
+    # Уникальный префикс на это сообщение (timestamp), чтобы post_key не конфликтовал
+    # с предыдущими генерациями того же юзера.
+    import time as _time
+    batch = int(_time.time())
+
     # Каждый вариант — отдельным сообщением, текст поста экранируем
     for v in variants:
-        safe_post = html.escape(str(v.get("post", "")))
+        raw_post = str(v.get("post", ""))
+        safe_post = html.escape(raw_post)
+        variant_id = v.get("id", "?")
         header = (
-            f"<b>Вариант {v.get('id', '?')}</b> · "
+            f"<b>Вариант {variant_id}</b> · "
             f"формула {v.get('hook_formula', '?')} · "
             f"<i>{html.escape(str(v.get('angle_technique', '—')))}</i>"
         )
@@ -189,7 +198,11 @@ async def _do_generate(
         full_text = f"{header}\n\n━━━━━━━━━━━━━━━━━\n\n{safe_post}"
         if len(full_text) > 4000:
             full_text = full_text[:4000] + "\n\n…(обрезано)"
-        await message.answer(full_text)
+
+        post_key = f"g{batch}_{variant_id}"
+        remember_post(user_id, post_key, raw_post)
+
+        await message.answer(full_text, reply_markup=publish_button(post_key))
 
     # Финальное сообщение со статусом лимита
     _, used_after = await can_generate_today(user_id)

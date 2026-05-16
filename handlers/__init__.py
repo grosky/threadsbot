@@ -12,6 +12,7 @@ from .profile_analysis import router as profile_analysis_router
 from .feed_analysis import router as feed_analysis_router
 from .storytelling import router as storytelling_router
 from .referral import router as referral_router
+from .threads_connect import router as threads_connect_router
 from .menu import router as menu_router
 
 
@@ -23,4 +24,5 @@ def setup_routers(dp: Dispatcher) -> None:
     dp.include_router(feed_analysis_router)
     dp.include_router(storytelling_router)
     dp.include_router(referral_router)
+    dp.include_router(threads_connect_router)
     dp.include_router(menu_router)

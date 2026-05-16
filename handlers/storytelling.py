@@ -19,6 +19,8 @@ from database import (
 )
 from gemini_service import generate_storytelling_from_voice
 
+from .threads_connect import publish_button, remember_post
+
 router = Router()
 log = logging.getLogger(__name__)
 
@@ -134,17 +136,22 @@ async def voice_received(message: Message, state: FSMContext, bot: Bot) -> None:
 
     heard = html.escape(str(result.get("heard", "—")))
     hook = html.escape(str(result.get("hook_line", "—")))
-    post = html.escape(str(result.get("post", "—")))
+    raw_post = str(result.get("post", "—"))
+    post = html.escape(raw_post)
 
     await message.answer(
         f"<b>🎧 Что я услышал:</b>\n<i>{heard}</i>\n\n"
         f"<b>🪝 Хук:</b>\n<i>{hook}</i>"
     )
 
+    import time as _time
+    post_key = f"v{int(_time.time())}"
+    remember_post(user_id, post_key, raw_post)
+
     full = f"<b>📝 Пост</b>\n\n━━━━━━━━━━━━━━━━━\n\n{post}"
     if len(full) > 4000:
         full = full[:4000] + "\n\n…(обрезано)"
-    await message.answer(full)
+    await message.answer(full, reply_markup=publish_button(post_key))
 
     _, used_after = await can_generate_today(user_id)
     remaining = max(0, DAILY_LIMIT - used_after)
@@ -200,16 +207,22 @@ async def audio_file_received(message: Message, state: FSMContext, bot: Bot) -> 
 
     heard = html.escape(str(result.get("heard", "—")))
     hook = html.escape(str(result.get("hook_line", "—")))
-    post = html.escape(str(result.get("post", "—")))
+    raw_post = str(result.get("post", "—"))
+    post = html.escape(raw_post)
 
     await message.answer(
         f"<b>🎧 Что я услышал:</b>\n<i>{heard}</i>\n\n"
         f"<b>🪝 Хук:</b>\n<i>{hook}</i>"
     )
+
+    import time as _time
+    post_key = f"a{int(_time.time())}"
+    remember_post(user_id, post_key, raw_post)
+
     full = f"<b>📝 Пост</b>\n\n━━━━━━━━━━━━━━━━━\n\n{post}"
     if len(full) > 4000:
         full = full[:4000] + "\n\n…(обрезано)"
-    await message.answer(full)
+    await message.answer(full, reply_markup=publish_button(post_key))
 
     _, used_after = await can_generate_today(user_id)
     remaining = max(0, DAILY_LIMIT - used_after)

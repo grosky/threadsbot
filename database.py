@@ -84,6 +84,17 @@ CREATE TABLE IF NOT EXISTS referrals (
 );
 
 CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id);
+
+CREATE TABLE IF NOT EXISTS threads_accounts (
+    user_id INTEGER PRIMARY KEY,
+    threads_user_id TEXT NOT NULL,
+    threads_username TEXT,
+    access_token_encrypted BLOB NOT NULL,
+    token_expires_at TIMESTAMP,
+    connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_post_at TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(telegram_id)
+);
 """
 
 # Бонус приглашающему за каждого реферала, активировавшего промокод
@@ -403,6 +414,67 @@ async def consume_referral_reward(
         "bonus_days": bonus_days,
         "new_expires_at": new_expires,
     }
+
+
+# ---------- THREADS ACCOUNTS ----------
+
+async def save_threads_account(
+    user_id: int,
+    threads_user_id: str,
+    threads_username: Optional[str],
+    access_token_encrypted: bytes,
+    token_expires_at: datetime,
+) -> None:
+    """Сохраняет / перезаписывает подключение Threads-аккаунта юзера."""
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "INSERT INTO threads_accounts "
+            "(user_id, threads_user_id, threads_username, access_token_encrypted, "
+            "token_expires_at, connected_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "threads_user_id = excluded.threads_user_id, "
+            "threads_username = excluded.threads_username, "
+            "access_token_encrypted = excluded.access_token_encrypted, "
+            "token_expires_at = excluded.token_expires_at, "
+            "connected_at = excluded.connected_at",
+            (
+                user_id,
+                threads_user_id,
+                threads_username,
+                access_token_encrypted,
+                token_expires_at.isoformat(),
+                datetime.utcnow().isoformat(),
+            ),
+        )
+        await db.commit()
+
+
+async def get_threads_account(user_id: int) -> Optional[dict]:
+    async with aiosqlite.connect(config.database_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM threads_accounts WHERE user_id = ?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def delete_threads_account(user_id: int) -> None:
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "DELETE FROM threads_accounts WHERE user_id = ?", (user_id,)
+        )
+        await db.commit()
+
+
+async def mark_threads_post_sent(user_id: int) -> None:
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "UPDATE threads_accounts SET last_post_at = ? WHERE user_id = ?",
+            (datetime.utcnow().isoformat(), user_id),
+        )
+        await db.commit()
 
 
 async def get_referral_stats(referrer_id: int) -> dict:

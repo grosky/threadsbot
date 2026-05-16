@@ -13,6 +13,14 @@ class Config:
     gemini_api_key: str
     admin_telegram_id: int
     database_path: str
+    # Meta / Threads API
+    meta_app_id: str
+    meta_app_secret: str
+    meta_redirect_uri: str
+    # Шифрование access-токенов в БД (Fernet, base64-encoded 32 байта)
+    encryption_key: str
+    # Порт для HTTP-сервера OAuth callback. Railway передаёт через PORT.
+    port: int
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -20,6 +28,11 @@ class Config:
         gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
         admin_id_str = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
         database_path = os.getenv("DATABASE_PATH", "bot.db").strip()
+        meta_app_id = os.getenv("META_APP_ID", "").strip()
+        meta_app_secret = os.getenv("META_APP_SECRET", "").strip()
+        meta_redirect_uri = os.getenv("META_REDIRECT_URI", "").strip()
+        encryption_key = os.getenv("ENCRYPTION_KEY", "").strip()
+        port_str = os.getenv("PORT", "8080").strip()
 
         missing = []
         if not bot_token:
@@ -36,6 +49,21 @@ class Config:
             gemini_api_key=gemini_api_key,
             admin_telegram_id=int(admin_id_str),
             database_path=database_path,
+            meta_app_id=meta_app_id,
+            meta_app_secret=meta_app_secret,
+            meta_redirect_uri=meta_redirect_uri,
+            encryption_key=encryption_key,
+            port=int(port_str),
+        )
+
+    @property
+    def threads_enabled(self) -> bool:
+        """Threads-фичи доступны только если все Meta-переменные заданы."""
+        return bool(
+            self.meta_app_id
+            and self.meta_app_secret
+            and self.meta_redirect_uri
+            and self.encryption_key
         )
 
 
