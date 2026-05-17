@@ -26,87 +26,88 @@ router = Router()
 
 
 def main_menu_keyboard() -> InlineKeyboardMarkup:
-    """Меню с группировкой: создание / аналитика / прочее.
+    """Меню с визуальными разделителями секций.
 
-    Ряды 2-кнопочные где возможно — компактнее на мобиле.
+    Лейблы-разделители — не-кликабельные (callback noop).
     """
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            # Создание
+            # ── Создание ──
+            [InlineKeyboardButton(text="── 📝 Создание ──", callback_data="noop")],
             [
                 InlineKeyboardButton(text="🎯 Сгенерить", callback_data="action:generate"),
                 InlineKeyboardButton(text="🎙 Голосом", callback_data="action:storytelling"),
             ],
             [InlineKeyboardButton(text="✍️ Свой пост", callback_data="action:custom_post")],
-            # Аналитика
+
+            # ── Аналитика ──
+            [InlineKeyboardButton(text="── 📊 Аналитика ──", callback_data="noop")],
             [
                 InlineKeyboardButton(text="📸 Профиль", callback_data="action:analyze_profile"),
                 InlineKeyboardButton(text="🔍 Лента", callback_data="action:feed_analysis"),
             ],
-            # Threads
-            [InlineKeyboardButton(text="🔗 Подключение Threads", callback_data="action:connect_threads")],
-            # Прочее
-            [
-                InlineKeyboardButton(text="🎁 Пригласить", callback_data="action:invite"),
-                InlineKeyboardButton(text="🏆 Ачивки", callback_data="action:achievements"),
-            ],
+
+            # ── Настройки ──
+            [InlineKeyboardButton(text="── ⚙️ Настройки ──", callback_data="noop")],
+            [InlineKeyboardButton(text="🔗 Threads", callback_data="action:connect_threads")],
             [
                 InlineKeyboardButton(text="👤 Профиль", callback_data="action:profile"),
                 InlineKeyboardButton(text="💎 Подписка", callback_data="action:subscription"),
+            ],
+            [
+                InlineKeyboardButton(text="🎁 Пригласить", callback_data="action:invite"),
+                InlineKeyboardButton(text="🏆 Ачивки", callback_data="action:achievements"),
             ],
         ]
     )
 
 
-async def _build_status_header(user_id: int) -> str:
-    """Шапка меню: имя бренда + статус подписки/Threads/лимит/стрик."""
-    # Стрик
-    streak = await get_streak(user_id)
-    streak_line = f"🔥 {streak} дн." if streak > 0 else ""
+@router.callback_query(F.data == "noop")
+async def _noop(callback: CallbackQuery) -> None:
+    """Игнорим клики по лейблам-разделителям."""
+    await callback.answer()
 
-    # Подписка
+
+async def _build_status_header(user_id: int) -> str:
+    """Шапка меню: статус подписки / Threads / лимит / стрик."""
+    streak = await get_streak(user_id)
+
     user = await get_user(user_id)
     sub_active = await is_subscription_active(user_id)
     if sub_active and user and user.get("subscription_expires_at"):
         try:
             expires = datetime.fromisoformat(user["subscription_expires_at"])
             days = max(0, (expires - datetime.utcnow()).days)
-            sub_line = f"💎 Подписка: {days} дн."
+            sub_line = f"💎 Подписка: <b>{days} дн.</b>"
         except (ValueError, TypeError):
             sub_line = "💎 Подписка: активна"
     else:
-        sub_line = "💎 Подписка: ❌"
+        sub_line = "💎 Подписка: ❌ неактивна"
 
-    # Threads
     th_account = await get_threads_account(user_id)
     if th_account:
         username = th_account.get("threads_username") or "—"
-        th_line = f"🔗 Threads: @{username}"
+        th_line = f"🔗 Threads: <b>@{username}</b>"
     else:
         th_line = "🔗 Threads: не подключён"
 
-    # Лимит генераций
     used = await count_today_generations(user_id)
     if user_id == config.admin_telegram_id:
-        limit_line = "🎯 Сегодня: ∞ (admin)"
+        limit_line = "🎯 Сегодня: <b>∞</b>"
     else:
         remaining = max(0, DAILY_LIMIT - used)
-        limit_line = f"🎯 Сегодня: {remaining}/{DAILY_LIMIT}"
+        limit_line = f"🎯 Сегодня: <b>{remaining}/{DAILY_LIMIT}</b>"
 
-    # Сборка
-    header = "🧵 <b>Lazy Threads</b>"
-    if streak_line:
-        header += f" · {streak_line}"
-    header += "\n────────────────────"
-
-    lines = [header, sub_line, th_line, limit_line]
+    lines = [sub_line, th_line, limit_line]
+    if streak > 0:
+        lines.append(f"🔥 Стрик: <b>{streak} дн.</b>")
     return "\n".join(lines)
 
 
 async def show_main_menu(message: Message) -> None:
     header = await _build_status_header(message.from_user.id)
     await message.answer(
-        f"{header}\n\n<b>Что делаем?</b>",
+        header,
         reply_markup=main_menu_keyboard(),
     )
 
