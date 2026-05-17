@@ -108,19 +108,48 @@ async def show_connect_screen(callback: CallbackQuery) -> None:
         )
         return
 
-    # Не подключён — даём ссылку на OAuth
+    # Не подключён — даём ссылку на OAuth + подробную инструкцию
     await callback.answer()
     auth_url = build_auth_url(user_id)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔗 Авторизоваться в Threads", url=auth_url)],
+        [InlineKeyboardButton(
+            text="❓ Что-то пошло не так",
+            callback_data="action:connect_threads_help",
+        )],
     ])
     await callback.message.answer(
-        "🧵 <b>Подключение Threads</b>\n\n"
-        "Жми кнопку ниже — откроется страница Meta, где ты разрешаешь боту "
-        "публиковать от твоего имени.\n\n"
-        "После подтверждения бот сам пришлёт сюда сообщение что всё ОК.\n\n"
-        "<i>Ссылка живёт 10 минут — если протупил, запроси новую.</i>",
+        "🧵 <b>Подключение Threads — 3 шага</b>\n\n"
+        "<b>1.</b> Жми кнопку ниже\n"
+        "<b>2.</b> На странице Meta жми <b>«Allow»</b> (разрешить публиковать)\n"
+        "<b>3.</b> Тебя перекинет на страницу «✅ Подключено» — закрывай и возвращайся в Telegram\n\n"
+        "Бот сам пришлёт подтверждение что всё ок.\n\n"
+        "⚠️ <b>Если Threads заблокирован у тебя в стране — включи VPN перед нажатием.</b>\n\n"
+        "<i>Ссылка живёт 10 минут.</i>",
         reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data == "action:connect_threads_help")
+async def connect_threads_help(callback: CallbackQuery) -> None:
+    """Расширенный гайд — что делать если падает 'invite not accepted' и т.п."""
+    await callback.answer()
+    await callback.message.answer(
+        "🛟 <b>Если выдаёт ошибку при авторизации</b>\n\n"
+        "<b>«User has not accepted the invite»</b>\n"
+        "Это значит твой Threads-аккаунт не принял приглашение тестировщика.\n\n"
+        "Что делать:\n"
+        "1. Открой Threads (с VPN)\n"
+        "2. Внизу <b>Profile</b> → справа сверху <b>☰</b> → <b>Settings</b>\n"
+        "3. <b>Account</b> → <b>Website permissions</b> (или <b>Apps</b>)\n"
+        "4. Найди приглашение от <b>Threadsbot</b> → жми <b>Accept</b>\n"
+        "5. Возвращайся в бот и пробуй авторизацию снова\n\n"
+        "<b>«Session expired»</b>\n"
+        "Ссылка устаревает за 10 минут. Запроси новую через /menu.\n\n"
+        "<b>Страница Meta не открывается</b>\n"
+        "Threads заблокирован в РФ — нужен VPN (страна = Бразилия / Турция / Латвия / любая не-РФ).\n\n"
+        "<b>Что-то другое</b>\n"
+        "Скрин ошибки автору → @grosky"
     )
 
 
@@ -196,11 +225,13 @@ async def publish_to_threads(callback: CallbackQuery, state: FSMContext) -> None
         return
 
     await callback.answer("Публикую...")
-    status_msg = await callback.message.answer("📤 Публикую в Threads...")
+    status_msg = await callback.message.answer(
+        "📤 Публикую в Threads... (длинный пост разобью на тред)"
+    )
 
     try:
         token = decrypt_token(account["access_token_encrypted"])
-        permalink = await publish_text_post(
+        result = await publish_text_post(
             threads_user_id=account["threads_user_id"],
             access_token=token,
             text=post_text,
@@ -215,9 +246,17 @@ async def publish_to_threads(callback: CallbackQuery, state: FSMContext) -> None
         )
         return
 
+    posts_count = result["posts_count"]
+    permalink = result["permalink"]
+
+    if posts_count == 1:
+        suffix = "одним постом"
+    else:
+        suffix = f"тредом из <b>{posts_count}</b> постов"
+
     await status_msg.edit_text(
-        f"✅ <b>Опубликовано в Threads!</b>\n\n"
-        f"<a href='{html.escape(permalink)}'>Открыть пост ↗</a>"
+        f"✅ <b>Опубликовано в Threads</b> {suffix}\n\n"
+        f"<a href='{html.escape(permalink)}'>Открыть в Threads ↗</a>"
     )
 
 

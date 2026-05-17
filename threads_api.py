@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -19,6 +20,9 @@ import aiohttp
 from cryptography.fernet import Fernet
 
 from config import config
+
+# Threads limit на один пост = 500 символов. Берём с запасом под numerование.
+THREADS_MAX_CHARS = 480
 
 log = logging.getLogger(__name__)
 
@@ -193,67 +197,173 @@ async def get_me(access_token: str) -> dict:
             return json.loads(text)
 
 
-# ---------- ПУБЛИКАЦИЯ ПОСТА ----------
+# ---------- РАЗБИЕНИЕ ТЕКСТА НА ТРЕД ----------
+
+def split_for_threads(text: str, max_len: int = THREADS_MAX_CHARS) -> list[str]:
+    """Разбивает длинный текст на куски ≤ max_len по естественным границам.
+
+    Приоритет точек разрыва:
+    1. Двойной перенос (абзацы)
+    2. Одинарный перенос
+    3. Конец предложения (. ! ?)
+    4. Граница слова
+    5. Жёсткий обрез (последний случай)
+
+    Сохраняет читабельность — не режет посреди слова если возможно.
+    """
+    text = text.strip()
+    if len(text) <= max_len:
+        return [text]
+
+    chunks: list[str] = []
+    remaining = text
+
+    while len(remaining) > max_len:
+        # Берём кусок длины max_len и ищем где безопасно резать
+        window = remaining[:max_len]
+
+        cut_at = -1
+        # 1) Абзац
+        idx = window.rfind("\n\n")
+        if idx > max_len // 3:
+            cut_at = idx
+            advance = idx + 2
+        else:
+            # 2) Одиночный перенос
+            idx = window.rfind("\n")
+            if idx > max_len // 3:
+                cut_at = idx
+                advance = idx + 1
+            else:
+                # 3) Конец предложения
+                best = -1
+                for marker in (". ", "! ", "? ", "; "):
+                    pos = window.rfind(marker)
+                    if pos > best:
+                        best = pos
+                        marker_len = len(marker)
+                if best > max_len // 3:
+                    cut_at = best + marker_len
+                    advance = cut_at
+                else:
+                    # 4) Граница слова
+                    idx = window.rfind(" ")
+                    if idx > max_len // 3:
+                        cut_at = idx
+                        advance = idx + 1
+                    else:
+                        # 5) Жёсткий обрез
+                        cut_at = max_len
+                        advance = max_len
+
+        chunks.append(remaining[:cut_at].strip())
+        remaining = remaining[advance:].strip()
+
+    if remaining:
+        chunks.append(remaining)
+
+    return chunks
+
+
+# ---------- ПУБЛИКАЦИЯ ПОСТА (single + chain) ----------
+
+async def _create_and_publish(
+    session: aiohttp.ClientSession,
+    threads_user_id: str,
+    access_token: str,
+    text: str,
+    reply_to_id: Optional[str] = None,
+) -> str:
+    """Один пост: создать container → опубликовать. Возвращает post_id.
+
+    reply_to_id=None — новый отдельный пост.
+    reply_to_id=<post_id> — реплай (для цепочки тредов).
+    """
+    create_params = {
+        "media_type": "TEXT",
+        "text": text,
+        "access_token": access_token,
+    }
+    if reply_to_id:
+        create_params["reply_to_id"] = reply_to_id
+
+    async with session.post(
+        f"{GRAPH_BASE}/{threads_user_id}/threads",
+        params=create_params,
+    ) as resp:
+        body = await resp.text()
+        if resp.status != 200:
+            raise RuntimeError(f"Create container failed [{resp.status}]: {body}")
+        container = json.loads(body)
+        container_id = container["id"]
+
+    async with session.post(
+        f"{GRAPH_BASE}/{threads_user_id}/threads_publish",
+        params={
+            "creation_id": container_id,
+            "access_token": access_token,
+        },
+    ) as resp:
+        body = await resp.text()
+        if resp.status != 200:
+            raise RuntimeError(f"Publish failed [{resp.status}]: {body}")
+        published = json.loads(body)
+        return str(published["id"])
+
+
+async def _get_permalink(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    post_id: str,
+) -> str:
+    """Достаёт permalink опубликованного поста."""
+    async with session.get(
+        f"{GRAPH_BASE}/{post_id}",
+        params={"fields": "permalink", "access_token": access_token},
+    ) as resp:
+        if resp.status == 200:
+            data = json.loads(await resp.text())
+            return data.get("permalink") or "https://www.threads.net/"
+    return "https://www.threads.net/"
+
 
 async def publish_text_post(
     threads_user_id: str, access_token: str, text: str
-) -> str:
-    """Публикует текстовый пост в Threads.
+) -> dict:
+    """Публикует текст в Threads.
 
-    Двухступенчатый процесс:
-    1. POST /{user-id}/threads — создать media container
-    2. POST /{user-id}/threads_publish — опубликовать
+    Если текст укладывается в 500 символов — одиночный пост.
+    Если длиннее — цепочка постов (тред), каждый реплай к предыдущему.
 
-    Возвращает permalink на опубликованный пост.
+    Возвращает {permalink, posts_count}.
     """
+    chunks = split_for_threads(text)
+    log.info(
+        "Publishing to Threads: user=%s chunks=%d total_chars=%d",
+        threads_user_id, len(chunks), len(text),
+    )
+
     async with aiohttp.ClientSession() as session:
-        # Шаг 1: создаём контейнер
-        async with session.post(
-            f"{GRAPH_BASE}/{threads_user_id}/threads",
-            params={
-                "media_type": "TEXT",
-                "text": text,
-                "access_token": access_token,
-            },
-        ) as resp:
-            text_resp = await resp.text()
-            if resp.status != 200:
-                raise RuntimeError(
-                    f"Create container failed [{resp.status}]: {text_resp}"
-                )
-            container = json.loads(text_resp)
-            container_id = container["id"]
+        first_post_id: Optional[str] = None
+        prev_post_id: Optional[str] = None
 
-        # Threads рекомендует ждать ~30 секунд между шагами для медиа,
-        # для текста можно сразу. Делаем небольшой sleep для надёжности.
-        # asyncio.sleep здесь не нужен — текст обрабатывается быстро.
+        for i, chunk in enumerate(chunks):
+            post_id = await _create_and_publish(
+                session=session,
+                threads_user_id=threads_user_id,
+                access_token=access_token,
+                text=chunk,
+                reply_to_id=prev_post_id,
+            )
+            if i == 0:
+                first_post_id = post_id
+            prev_post_id = post_id
 
-        # Шаг 2: публикуем
-        async with session.post(
-            f"{GRAPH_BASE}/{threads_user_id}/threads_publish",
-            params={
-                "creation_id": container_id,
-                "access_token": access_token,
-            },
-        ) as resp:
-            text_resp = await resp.text()
-            if resp.status != 200:
-                raise RuntimeError(
-                    f"Publish failed [{resp.status}]: {text_resp}"
-                )
-            published = json.loads(text_resp)
-            post_id = published["id"]
+            # Между постами в цепочке — пауза, чтобы Threads успевал обработать
+            # и не получить rate limit. Для последнего поста sleep не нужен.
+            if i < len(chunks) - 1:
+                await asyncio.sleep(2)
 
-        # Получаем permalink
-        async with session.get(
-            f"{GRAPH_BASE}/{post_id}",
-            params={
-                "fields": "permalink",
-                "access_token": access_token,
-            },
-        ) as resp:
-            if resp.status == 200:
-                data = json.loads(await resp.text())
-                return data.get("permalink", f"https://www.threads.net/")
+        permalink = await _get_permalink(session, access_token, first_post_id)
 
-    return f"https://www.threads.net/"
+    return {"permalink": permalink, "posts_count": len(chunks)}
