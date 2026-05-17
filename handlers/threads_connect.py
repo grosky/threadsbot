@@ -263,6 +263,43 @@ async def publish_to_threads(callback: CallbackQuery, state: FSMContext) -> None
 
 # ---------- /threads команда ----------
 
+@router.message(Command("threads_test"))
+async def cmd_threads_test(message: Message) -> None:
+    """Публикует заведомо чистый короткий пост — для диагностики content_publish.
+
+    Если этот срабатывает — значит проблема в контенте обычных постов
+    (ссылки, CAPS, длина). Если этот тоже падает — проблема в scope/app.
+    """
+    user_id = message.from_user.id
+    account = await get_threads_account(user_id)
+    if not account:
+        await message.answer("Threads не подключён — нечего тестить.")
+        return
+
+    test_text = "test post from bot at " + datetime.utcnow().strftime("%H:%M:%S UTC")
+
+    await message.answer(f"📤 Пробую опубликовать тестовый пост:\n\n<i>{html.escape(test_text)}</i>")
+    try:
+        token = decrypt_token(account["access_token_encrypted"])
+        from threads_api import publish_text_post
+        result = await publish_text_post(
+            threads_user_id=account["threads_user_id"],
+            access_token=token,
+            text=test_text,
+        )
+        await message.answer(
+            f"✅ Опубликовано!\n\n"
+            f"<a href='{html.escape(result['permalink'])}'>Открыть пост ↗</a>\n\n"
+            f"Если этот тест прошёл, а обычные посты падают — проблема в "
+            f"контенте (ссылки, CAPS, длина)."
+        )
+    except Exception as e:
+        await message.answer(
+            f"❌ Тест провалился — значит проблема в scope/app, не в контенте.\n\n"
+            f"<code>{html.escape(type(e).__name__)}: {html.escape(str(e))[:400]}</code>"
+        )
+
+
 @router.message(Command("threads_debug"))
 async def cmd_threads_debug(message: Message) -> None:
     """Debug: проверяет какие scopes реально в токене юзера.
