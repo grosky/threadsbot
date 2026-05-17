@@ -178,6 +178,27 @@ async def refresh_long_lived(token: str) -> dict:
             return json.loads(text)
 
 
+async def debug_token(user_token: str) -> dict:
+    """Проверяет токен через graph.threads.net/debug_token.
+
+    Возвращает {scopes, expires_at, is_valid, user_id, type, ...}.
+    Использует app-token (app_id|app_secret) как access_token для авторизации.
+    """
+    app_token = f"{config.meta_app_id}|{config.meta_app_secret}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            "https://graph.threads.net/debug_token",
+            params={
+                "input_token": user_token,
+                "access_token": app_token,
+            },
+        ) as resp:
+            text = await resp.text()
+            if resp.status != 200:
+                raise RuntimeError(f"debug_token failed [{resp.status}]: {text}")
+            return json.loads(text).get("data", {})
+
+
 async def get_me(access_token: str) -> dict:
     """Получить инфо о подключённом Threads-аккаунте.
 

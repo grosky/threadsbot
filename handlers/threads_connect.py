@@ -24,6 +24,7 @@ from database import (
 )
 from threads_api import (
     build_auth_url,
+    debug_token,
     decrypt_token,
     publish_text_post,
 )
@@ -261,6 +262,51 @@ async def publish_to_threads(callback: CallbackQuery, state: FSMContext) -> None
 
 
 # ---------- /threads команда ----------
+
+@router.message(Command("threads_debug"))
+async def cmd_threads_debug(message: Message) -> None:
+    """Debug: проверяет какие scopes реально в токене юзера.
+
+    Помогает диагностировать «Application does not have permission» —
+    видим сразу есть ли threads_content_publish в гранте.
+    """
+    user_id = message.from_user.id
+    account = await get_threads_account(user_id)
+    if not account:
+        await message.answer("Threads не подключён — нечего дебажить.")
+        return
+
+    try:
+        token = decrypt_token(account["access_token_encrypted"])
+        info = await debug_token(token)
+    except Exception as e:
+        await message.answer(
+            f"❌ debug_token failed:\n<code>{html.escape(type(e).__name__)}: "
+            f"{html.escape(str(e))[:400]}</code>"
+        )
+        return
+
+    scopes = info.get("scopes", [])
+    granular = info.get("granular_scopes", [])
+    is_valid = info.get("is_valid")
+    app_id = info.get("app_id")
+    th_user_id = info.get("user_id")
+
+    scopes_str = ", ".join(scopes) if scopes else "—"
+
+    has_publish = "threads_content_publish" in scopes
+    publish_mark = "✅" if has_publish else "❌"
+
+    await message.answer(
+        f"🔍 <b>Token debug</b>\n\n"
+        f"App ID: <code>{html.escape(str(app_id))}</code>\n"
+        f"Threads user: <code>{html.escape(str(th_user_id))}</code>\n"
+        f"Valid: {is_valid}\n\n"
+        f"<b>Scopes:</b> {html.escape(scopes_str)}\n"
+        f"{publish_mark} threads_content_publish\n\n"
+        f"<b>Granular:</b>\n<code>{html.escape(str(granular)[:600])}</code>"
+    )
+
 
 @router.message(Command("threads"))
 async def cmd_threads(message: Message) -> None:
