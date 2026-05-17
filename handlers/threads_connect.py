@@ -27,6 +27,7 @@ from threads_api import (
     debug_token,
     decrypt_token,
     publish_text_post,
+    split_for_threads,
 )
 
 router = Router()
@@ -262,6 +263,49 @@ async def publish_to_threads(callback: CallbackQuery, state: FSMContext) -> None
 
 
 # ---------- /threads команда ----------
+
+@router.message(Command("threads_dry"))
+async def cmd_threads_dry(message: Message) -> None:
+    """Dry-run сплита: показывает как бот режет текст БЕЗ публикации.
+
+    Использование: ответ на сообщение с постом + /threads_dry,
+    либо просто /threads_dry длинный текст здесь...
+    """
+    # Берём текст: либо из reply, либо из аргумента команды
+    src = message.reply_to_message.text if message.reply_to_message else None
+    if not src:
+        # Текст после команды
+        parts = (message.text or "").split(None, 1)
+        src = parts[1] if len(parts) > 1 else None
+
+    if not src:
+        await message.answer(
+            "Использование:\n"
+            "• <b>Reply</b> на сообщение с постом + <code>/threads_dry</code>\n"
+            "• Или <code>/threads_dry [текст поста сюда]</code>\n\n"
+            "Покажу как бот разрежет текст для Threads — без публикации."
+        )
+        return
+
+    chunks = split_for_threads(src)
+
+    lines = [
+        f"📐 <b>Dry-run сплита</b>",
+        f"Всего: <b>{len(src)}</b> символов → <b>{len(chunks)}</b> кусков\n",
+    ]
+    for i, chunk in enumerate(chunks, 1):
+        preview = chunk[:200]
+        if len(chunk) > 200:
+            preview += "…"
+        lines.append(
+            f"<b>━━━ Chunk {i}/{len(chunks)} (len={len(chunk)}) ━━━</b>\n"
+            f"<code>{html.escape(preview)}</code>\n"
+        )
+    text = "\n".join(lines)
+    if len(text) > 4000:
+        text = text[:3900] + "\n\n…(обрезано)"
+    await message.answer(text)
+
 
 @router.message(Command("threads_test"))
 async def cmd_threads_test(message: Message) -> None:

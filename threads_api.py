@@ -394,18 +394,36 @@ async def publish_text_post(
         threads_user_id, len(chunks), len(text),
     )
 
+    # Подробный лог каждого chunk'а в Railway — для диагностики
+    for i, chunk in enumerate(chunks):
+        preview = chunk[:80].replace("\n", "\\n")
+        log.info(
+            "Chunk %d/%d (len=%d): %s%s",
+            i + 1, len(chunks), len(chunk), preview,
+            "…" if len(chunk) > 80 else "",
+        )
+
     async with aiohttp.ClientSession() as session:
         first_post_id: Optional[str] = None
         prev_post_id: Optional[str] = None
 
         for i, chunk in enumerate(chunks):
-            post_id = await _create_and_publish(
-                session=session,
-                threads_user_id=threads_user_id,
-                access_token=access_token,
-                text=chunk,
-                reply_to_id=prev_post_id,
-            )
+            try:
+                post_id = await _create_and_publish(
+                    session=session,
+                    threads_user_id=threads_user_id,
+                    access_token=access_token,
+                    text=chunk,
+                    reply_to_id=prev_post_id,
+                )
+            except Exception as e:
+                # Включаем номер chunk'а и его длину в ошибку
+                preview = chunk[:120].replace("\n", " ")
+                raise RuntimeError(
+                    f"Chunk {i+1}/{len(chunks)} (len={len(chunk)}) failed. "
+                    f"Preview: «{preview}…» — {e}"
+                ) from e
+
             if i == 0:
                 first_post_id = post_id
             prev_post_id = post_id
