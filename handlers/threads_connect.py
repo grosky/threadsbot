@@ -214,8 +214,29 @@ async def publish_to_threads(callback: CallbackQuery, state: FSMContext) -> None
 
     if not post_text:
         await callback.answer(
-            "Текст поста потерян (старше 24 часов?). Сгенерируй заново.",
+            "Текст поста потерян. Скопируй текст вручную и используй "
+            "✍️ Опубликовать свой пост",
             show_alert=True,
+        )
+        # Шлём подсказку с кнопкой
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="✍️ Опубликовать свой пост",
+                callback_data="action:custom_post",
+            )],
+            [InlineKeyboardButton(
+                text="🎯 Сгенерить новый",
+                callback_data="action:generate",
+            )],
+        ])
+        await callback.message.answer(
+            "⚠️ <b>Текст этого поста уже нельзя достать</b> "
+            "(старше 24 часов или был удалён).\n\n"
+            "Что можно сделать:\n"
+            "• <b>Понравился сам пост</b> → скопируй текст вверху сообщения, "
+            "жми <b>«✍️ Опубликовать свой пост»</b>, вставь и публикуй\n"
+            "• <b>Хочешь свежие варианты</b> → жми «🎯 Сгенерить новый»",
+            reply_markup=kb,
         )
         return
 
