@@ -179,24 +179,54 @@ async def refresh_long_lived(token: str) -> dict:
 
 
 async def debug_token(user_token: str) -> dict:
-    """Проверяет токен через graph.threads.net/debug_token.
+    """Многоступенчатый дебаг токена.
 
-    Возвращает {scopes, expires_at, is_valid, user_id, type, ...}.
-    Использует app-token (app_id|app_secret) как access_token для авторизации.
+    1. /me на graph.threads.net — проверка что токен в принципе работает
+    2. /threads — попытка создать тестовый контейнер для проверки content_publish
+    3. debug_token на graph.facebook.com (если работает)
+
+    Возвращает агрегированный отчёт.
     """
+    report: dict = {}
     app_token = f"{config.meta_app_id}|{config.meta_app_secret}"
+
     async with aiohttp.ClientSession() as session:
+        # 1) /me — должен работать с threads_basic
         async with session.get(
-            "https://graph.threads.net/debug_token",
-            params={
-                "input_token": user_token,
-                "access_token": app_token,
-            },
+            f"{GRAPH_BASE}/me",
+            params={"fields": "id,username", "access_token": user_token},
         ) as resp:
-            text = await resp.text()
-            if resp.status != 200:
-                raise RuntimeError(f"debug_token failed [{resp.status}]: {text}")
-            return json.loads(text).get("data", {})
+            body = await resp.text()
+            report["me_status"] = resp.status
+            report["me_body"] = body[:400]
+            if resp.status == 200:
+                report["me_data"] = json.loads(body)
+
+        # 2) Попытка создать тестовый контейнер (не публикуя)
+        threads_user_id = report.get("me_data", {}).get("id")
+        if threads_user_id:
+            async with session.post(
+                f"{GRAPH_BASE}/{threads_user_id}/threads",
+                params={
+                    "media_type": "TEXT",
+                    "text": "test container — will not publish",
+                    "access_token": user_token,
+                },
+            ) as resp:
+                body = await resp.text()
+                report["create_status"] = resp.status
+                report["create_body"] = body[:400]
+
+        # 3) debug_token на graph.facebook.com (запасной путь)
+        async with session.get(
+            "https://graph.facebook.com/debug_token",
+            params={"input_token": user_token, "access_token": app_token},
+        ) as resp:
+            body = await resp.text()
+            report["fb_debug_status"] = resp.status
+            report["fb_debug_body"] = body[:600]
+
+    return report
 
 
 async def get_me(access_token: str) -> dict:

@@ -286,26 +286,26 @@ async def cmd_threads_debug(message: Message) -> None:
         )
         return
 
-    scopes = info.get("scopes", [])
-    granular = info.get("granular_scopes", [])
-    is_valid = info.get("is_valid")
-    app_id = info.get("app_id")
-    th_user_id = info.get("user_id")
+    me_status = info.get("me_status")
+    me_body = info.get("me_body", "")
+    create_status = info.get("create_status")
+    create_body = info.get("create_body", "")
+    fb_status = info.get("fb_debug_status")
+    fb_body = info.get("fb_debug_body", "")
 
-    scopes_str = ", ".join(scopes) if scopes else "—"
-
-    has_publish = "threads_content_publish" in scopes
-    publish_mark = "✅" if has_publish else "❌"
-
-    await message.answer(
-        f"🔍 <b>Token debug</b>\n\n"
-        f"App ID: <code>{html.escape(str(app_id))}</code>\n"
-        f"Threads user: <code>{html.escape(str(th_user_id))}</code>\n"
-        f"Valid: {is_valid}\n\n"
-        f"<b>Scopes:</b> {html.escape(scopes_str)}\n"
-        f"{publish_mark} threads_content_publish\n\n"
-        f"<b>Granular:</b>\n<code>{html.escape(str(granular)[:600])}</code>"
+    text = (
+        "🔍 <b>Token debug report</b>\n\n"
+        f"<b>1. GET /me</b> → status <code>{me_status}</code>\n"
+        f"<code>{html.escape(str(me_body))}</code>\n\n"
+        f"<b>2. POST /threads (test container)</b> → status <code>{create_status}</code>\n"
+        f"<code>{html.escape(str(create_body))}</code>\n\n"
+        f"<b>3. FB debug_token</b> → status <code>{fb_status}</code>\n"
+        f"<code>{html.escape(str(fb_body))}</code>"
     )
+    # Telegram limit
+    if len(text) > 4000:
+        text = text[:4000] + "\n…(обрезано)"
+    await message.answer(text)
 
 
 @router.message(Command("threads"))
