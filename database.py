@@ -95,6 +95,17 @@ CREATE TABLE IF NOT EXISTS threads_accounts (
     last_post_at TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(telegram_id)
 );
+
+CREATE TABLE IF NOT EXISTS pending_posts (
+    user_id INTEGER NOT NULL,
+    post_key TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, post_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pending_posts_created
+    ON pending_posts(created_at);
 """
 
 # Бонус приглашающему за каждого реферала, активировавшего промокод
@@ -485,6 +496,43 @@ async def mark_threads_post_sent(user_id: int) -> None:
             (datetime.utcnow().isoformat(), user_id),
         )
         await db.commit()
+
+
+# ---------- PENDING POSTS (для публикации в Threads) ----------
+
+async def save_pending_post(user_id: int, post_key: str, text: str) -> None:
+    """Сохраняет текст поста в БД для последующей публикации.
+
+    Переживает редеплой бота (в отличие от in-memory кэша).
+    TTL — 24 часа, чистится фоновой джобой.
+    """
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO pending_posts (user_id, post_key, text, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (user_id, post_key, text, datetime.utcnow().isoformat()),
+        )
+        await db.commit()
+
+
+async def get_pending_post(user_id: int, post_key: str) -> Optional[str]:
+    async with aiosqlite.connect(config.database_path) as db:
+        async with db.execute(
+            "SELECT text FROM pending_posts WHERE user_id = ? AND post_key = ?",
+            (user_id, post_key),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else None
+
+
+async def cleanup_old_pending_posts() -> int:
+    """Удаляет посты старше 24 часов. Возвращает кол-во удалённых."""
+    async with aiosqlite.connect(config.database_path) as db:
+        cur = await db.execute(
+            "DELETE FROM pending_posts WHERE created_at < datetime('now', '-1 day')"
+        )
+        await db.commit()
+        return cur.rowcount
 
 
 async def get_referral_stats(referrer_id: int) -> dict:

@@ -8,7 +8,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from config import config
-from database import init_db
+from database import cleanup_old_pending_posts, init_db
 from handlers import setup_routers
 from oauth_server import start_http_server
 
@@ -18,6 +18,20 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 log = logging.getLogger(__name__)
+
+
+async def _pending_posts_cleanup_loop() -> None:
+    """Раз в час чистит pending_posts старше 24 часов."""
+    while True:
+        try:
+            await asyncio.sleep(3600)
+            deleted = await cleanup_old_pending_posts()
+            if deleted:
+                log.info("Cleanup: deleted %d expired pending_posts", deleted)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Cleanup loop error")
 
 
 async def main() -> None:
@@ -42,12 +56,16 @@ async def main() -> None:
             "Threads-фичи отключены, HTTP-сервер не запускаю"
         )
 
+    # Фоновая чистка устаревших pending_posts
+    cleanup_task = asyncio.create_task(_pending_posts_cleanup_loop())
+
     log.info("Запуск polling...")
     try:
         # Сбрасываем накопившиеся апдейты при рестарте
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
     finally:
+        cleanup_task.cancel()
         if http_runner is not None:
             await http_runner.cleanup()
         await bot.session.close()

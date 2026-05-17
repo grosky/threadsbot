@@ -146,7 +146,7 @@ async def voice_received(message: Message, state: FSMContext, bot: Bot) -> None:
 
     import time as _time
     post_key = f"v{int(_time.time())}"
-    remember_post(user_id, post_key, raw_post)
+    await remember_post(user_id, post_key, raw_post)
 
     full = f"<b>📝 Пост</b>\n\n━━━━━━━━━━━━━━━━━\n\n{post}"
     if len(full) > 4000:
@@ -217,7 +217,7 @@ async def audio_file_received(message: Message, state: FSMContext, bot: Bot) -> 
 
     import time as _time
     post_key = f"a{int(_time.time())}"
-    remember_post(user_id, post_key, raw_post)
+    await remember_post(user_id, post_key, raw_post)
 
     full = f"<b>📝 Пост</b>\n\n━━━━━━━━━━━━━━━━━\n\n{post}"
     if len(full) > 4000:

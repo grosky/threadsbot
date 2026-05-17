@@ -25,6 +25,7 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="🎯 Сгенерить пост", callback_data="action:generate")],
             [InlineKeyboardButton(text="🎙 Голосовой сторителлинг", callback_data="action:storytelling")],
+            [InlineKeyboardButton(text="✍️ Опубликовать свой пост", callback_data="action:custom_post")],
             [InlineKeyboardButton(text="🔗 Подключить Threads", callback_data="action:connect_threads")],
             [InlineKeyboardButton(text="📸 Анализ профиля", callback_data="action:analyze_profile")],
             [InlineKeyboardButton(text="🔍 Разбор чужой ленты", callback_data="action:feed_analysis")],

@@ -200,7 +200,7 @@ async def _do_generate(
             full_text = full_text[:4000] + "\n\n…(обрезано)"
 
         post_key = f"g{batch}_{variant_id}"
-        remember_post(user_id, post_key, raw_post)
+        await remember_post(user_id, post_key, raw_post)
 
         await message.answer(full_text, reply_markup=publish_button(post_key))
 

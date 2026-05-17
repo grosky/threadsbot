@@ -18,9 +18,11 @@ from aiogram.types import (
 from config import config
 from database import (
     delete_threads_account,
+    get_pending_post,
     get_threads_account,
     is_subscription_active,
     mark_threads_post_sent,
+    save_pending_post,
 )
 from threads_api import (
     build_auth_url,
@@ -33,25 +35,32 @@ from threads_api import (
 router = Router()
 log = logging.getLogger(__name__)
 
-# In-memory cache: {user_id: {post_key: post_text}}
-# Сохраняется только в RAM — после рестарта пропадает (юзер просто сгенерит заново).
-# FSM не подходит т.к. state.clear() в конце генерации стирает.
-_publishable_posts: dict[int, dict[str, str]] = {}
+# Кэш для скорости (in-memory). Основное хранилище — БД (pending_posts),
+# чтобы посты не пропадали при редеплое.
+_cache: dict[tuple[int, str], str] = {}
 
 
-def remember_post(user_id: int, post_key: str, text: str) -> None:
-    """Кладёт текст поста в кэш для последующей публикации."""
-    if user_id not in _publishable_posts:
-        _publishable_posts[user_id] = {}
-    _publishable_posts[user_id][post_key] = text
-    # Ограничиваем размер на юзера, чтобы не утечь по памяти
-    if len(_publishable_posts[user_id]) > 50:
-        oldest = next(iter(_publishable_posts[user_id]))
-        _publishable_posts[user_id].pop(oldest)
+async def remember_post(user_id: int, post_key: str, text: str) -> None:
+    """Сохраняет текст поста для последующей публикации (БД + кэш)."""
+    _cache[(user_id, post_key)] = text
+    # Ограничиваем in-memory размер чтобы не утечь
+    if len(_cache) > 500:
+        # Удаляем 100 самых старых ключей
+        oldest_keys = list(_cache.keys())[:100]
+        for k in oldest_keys:
+            _cache.pop(k, None)
+    await save_pending_post(user_id, post_key, text)
 
 
-def get_post(user_id: int, post_key: str) -> str | None:
-    return _publishable_posts.get(user_id, {}).get(post_key)
+async def get_post(user_id: int, post_key: str) -> str | None:
+    """Достаёт текст: сначала из кэша, при miss — из БД."""
+    cached = _cache.get((user_id, post_key))
+    if cached is not None:
+        return cached
+    text = await get_pending_post(user_id, post_key)
+    if text is not None:
+        _cache[(user_id, post_key)] = text
+    return text
 
 
 def _expiry_status(token_expires_at: str) -> tuple[bool, int]:
@@ -200,12 +209,12 @@ async def publish_to_threads(callback: CallbackQuery, state: FSMContext) -> None
     user_id = callback.from_user.id
     post_key = callback.data.split(":", 2)[2]
 
-    # Достаём текст поста из in-memory кэша
-    post_text = get_post(user_id, post_key)
+    # Достаём текст поста: кэш → БД
+    post_text = await get_post(user_id, post_key)
 
     if not post_text:
         await callback.answer(
-            "Текст поста потерян (бот перезапустили?). Сгенерируй заново.",
+            "Текст поста потерян (старше 24 часов?). Сгенерируй заново.",
             show_alert=True,
         )
         return
