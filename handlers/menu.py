@@ -26,46 +26,48 @@ router = Router()
 
 
 def main_menu_keyboard() -> InlineKeyboardMarkup:
-    """Меню с визуальными разделителями секций.
-
-    Лейблы-разделители — не-кликабельные (callback noop).
-    """
+    """Главное меню: 3 раздела."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            # ── Создание ──
-            [InlineKeyboardButton(text="── 📝 Создание ──", callback_data="noop")],
-            [
-                InlineKeyboardButton(text="🎯 Сгенерить", callback_data="action:generate"),
-                InlineKeyboardButton(text="🎙 Голосом", callback_data="action:storytelling"),
-            ],
-            [InlineKeyboardButton(text="✍️ Свой пост", callback_data="action:custom_post")],
-
-            # ── Аналитика ──
-            [InlineKeyboardButton(text="── 📊 Аналитика ──", callback_data="noop")],
-            [
-                InlineKeyboardButton(text="📸 Профиль", callback_data="action:analyze_profile"),
-                InlineKeyboardButton(text="🔍 Лента", callback_data="action:feed_analysis"),
-            ],
-
-            # ── Настройки ──
-            [InlineKeyboardButton(text="── ⚙️ Настройки ──", callback_data="noop")],
-            [InlineKeyboardButton(text="🔗 Threads", callback_data="action:connect_threads")],
-            [
-                InlineKeyboardButton(text="👤 Профиль", callback_data="action:profile"),
-                InlineKeyboardButton(text="💎 Подписка", callback_data="action:subscription"),
-            ],
-            [
-                InlineKeyboardButton(text="🎁 Пригласить", callback_data="action:invite"),
-                InlineKeyboardButton(text="🏆 Ачивки", callback_data="action:achievements"),
-            ],
+            [InlineKeyboardButton(text="📝 Создание постов", callback_data="menu:create")],
+            [InlineKeyboardButton(text="📊 Аналитика", callback_data="menu:analytics")],
+            [InlineKeyboardButton(text="⚙️ Настройки", callback_data="menu:settings")],
         ]
     )
 
 
-@router.callback_query(F.data == "noop")
-async def _noop(callback: CallbackQuery) -> None:
-    """Игнорим клики по лейблам-разделителям."""
-    await callback.answer()
+def create_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎯 Сгенерить пост", callback_data="action:generate")],
+            [InlineKeyboardButton(text="🎙 Голосовой сторителлинг", callback_data="action:storytelling")],
+            [InlineKeyboardButton(text="✍️ Опубликовать свой пост", callback_data="action:custom_post")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
+        ]
+    )
+
+
+def analytics_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📸 Анализ своего профиля", callback_data="action:analyze_profile")],
+            [InlineKeyboardButton(text="🔍 Разбор чужой ленты", callback_data="action:feed_analysis")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
+        ]
+    )
+
+
+def settings_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔗 Подключение Threads", callback_data="action:connect_threads")],
+            [InlineKeyboardButton(text="👤 Мой профиль", callback_data="action:profile")],
+            [InlineKeyboardButton(text="💎 Подписка", callback_data="action:subscription")],
+            [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="action:invite")],
+            [InlineKeyboardButton(text="🏆 Ачивки", callback_data="action:achievements")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
+        ]
+    )
 
 
 async def _build_status_header(user_id: int) -> str:
@@ -115,6 +117,65 @@ async def show_main_menu(message: Message) -> None:
 @router.message(Command("menu"))
 async def cmd_menu(message: Message) -> None:
     await show_main_menu(message)
+
+
+# ---------- Иерархическая навигация ----------
+
+@router.callback_query(F.data == "menu:main")
+async def go_main(callback: CallbackQuery) -> None:
+    header = await _build_status_header(callback.from_user.id)
+    await callback.answer()
+    try:
+        await callback.message.edit_text(header, reply_markup=main_menu_keyboard())
+    except Exception:
+        # На случай если сообщение не редактируется (например слишком старое)
+        await callback.message.answer(header, reply_markup=main_menu_keyboard())
+
+
+@router.callback_query(F.data == "menu:create")
+async def go_create(callback: CallbackQuery) -> None:
+    await callback.answer()
+    text = (
+        "📝 <b>Создание постов</b>\n\n"
+        "🎯 <b>Сгенерить</b> — Gemini создаёт 3 варианта по выбранному формату\n"
+        "🎙 <b>Голосом</b> — наговариваешь идею, бот собирает живой сторителлинг\n"
+        "✍️ <b>Свой пост</b> — пишешь руками, бот публикует в Threads"
+    )
+    try:
+        await callback.message.edit_text(text, reply_markup=create_menu_keyboard())
+    except Exception:
+        await callback.message.answer(text, reply_markup=create_menu_keyboard())
+
+
+@router.callback_query(F.data == "menu:analytics")
+async def go_analytics(callback: CallbackQuery) -> None:
+    await callback.answer()
+    text = (
+        "📊 <b>Аналитика</b>\n\n"
+        "📸 <b>Анализ профиля</b> — скрин шапки Threads → разбор упаковки + правки\n"
+        "🔍 <b>Разбор ленты</b> — кидаешь 3-10 чужих постов → находит паттерны и адаптирует под тебя"
+    )
+    try:
+        await callback.message.edit_text(text, reply_markup=analytics_menu_keyboard())
+    except Exception:
+        await callback.message.answer(text, reply_markup=analytics_menu_keyboard())
+
+
+@router.callback_query(F.data == "menu:settings")
+async def go_settings(callback: CallbackQuery) -> None:
+    await callback.answer()
+    text = (
+        "⚙️ <b>Настройки</b>\n\n"
+        "🔗 <b>Threads</b> — подключение / отключение аккаунта для публикаций\n"
+        "👤 <b>Профиль</b> — твои ниша, ЦА, продукт\n"
+        "💎 <b>Подписка</b> — срок действия\n"
+        "🎁 <b>Пригласить</b> — твоя ref-ссылка и статистика\n"
+        "🏆 <b>Ачивки</b> — открытые и закрытые"
+    )
+    try:
+        await callback.message.edit_text(text, reply_markup=settings_menu_keyboard())
+    except Exception:
+        await callback.message.answer(text, reply_markup=settings_menu_keyboard())
 
 
 @router.callback_query(F.data == "action:profile")
