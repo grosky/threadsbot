@@ -247,9 +247,15 @@ async def count_today_generations(telegram_id: int) -> int:
             return row[0] if row else 0
 
 
+def _is_admin(telegram_id: int) -> bool:
+    return telegram_id == config.admin_telegram_id
+
+
 async def can_generate_today(telegram_id: int) -> tuple[bool, int]:
-    """Возвращает (can_generate, used_today)."""
+    """Возвращает (can_generate, used_today). Админ — безлимит."""
     used = await count_today_generations(telegram_id)
+    if _is_admin(telegram_id):
+        return True, used
     return used < DAILY_LIMIT, used
 
 
@@ -279,7 +285,9 @@ async def count_today_profile_analyses(telegram_id: int) -> int:
 
 
 async def can_analyze_profile_today(telegram_id: int) -> bool:
-    """1 анализ в сутки на юзера. Reset в 00:00 UTC."""
+    """1 анализ в сутки на юзера. Reset в 00:00 UTC. Админ — безлимит."""
+    if _is_admin(telegram_id):
+        return True
     return await count_today_profile_analyses(telegram_id) < 1
 
 
@@ -307,7 +315,9 @@ async def count_today_feed_analyses(telegram_id: int) -> int:
 
 
 async def can_analyze_feed_today(telegram_id: int) -> bool:
-    """1 разбор в сутки. Reset в 00:00 UTC."""
+    """1 разбор в сутки. Reset в 00:00 UTC. Админ — безлимит."""
+    if _is_admin(telegram_id):
+        return True
     return await count_today_feed_analyses(telegram_id) < 1
 
 

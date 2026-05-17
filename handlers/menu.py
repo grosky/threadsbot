@@ -10,7 +10,7 @@ from aiogram.types import (
     Message,
 )
 
-from config import DAILY_LIMIT
+from config import DAILY_LIMIT, config
 from database import (
     count_today_generations,
     get_user,
@@ -38,11 +38,15 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
 async def show_main_menu(message: Message) -> None:
     user_id = message.from_user.id
     used = await count_today_generations(user_id)
-    remaining = max(0, DAILY_LIMIT - used)
+
+    if user_id == config.admin_telegram_id:
+        remaining_str = "∞ (admin)"
+    else:
+        remaining_str = f"{max(0, DAILY_LIMIT - used)}/{DAILY_LIMIT}"
 
     await message.answer(
         f"<b>Главное меню</b>\n\n"
-        f"Осталось генераций сегодня: <b>{remaining}/{DAILY_LIMIT}</b>\n\n"
+        f"Осталось генераций сегодня: <b>{remaining_str}</b>\n\n"
         f"Что делаем?",
         reply_markup=main_menu_keyboard(),
     )
