@@ -106,6 +106,33 @@ CREATE TABLE IF NOT EXISTS pending_posts (
 
 CREATE INDEX IF NOT EXISTS idx_pending_posts_created
     ON pending_posts(created_at);
+
+CREATE TABLE IF NOT EXISTS user_streaks (
+    user_id INTEGER PRIMARY KEY,
+    current_streak INTEGER DEFAULT 0,
+    best_streak INTEGER DEFAULT 0,
+    last_active_date DATE,
+    FOREIGN KEY (user_id) REFERENCES users(telegram_id)
+);
+
+CREATE TABLE IF NOT EXISTS achievements (
+    user_id INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    unlocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, code),
+    FOREIGN KEY (user_id) REFERENCES users(telegram_id)
+);
+
+CREATE TABLE IF NOT EXISTS threads_post_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    posts_count INTEGER DEFAULT 1,
+    FOREIGN KEY (user_id) REFERENCES users(telegram_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_threads_post_log_user
+    ON threads_post_log(user_id, posted_at);
 """
 
 # Бонус приглашающему за каждого реферала, активировавшего промокод
@@ -533,6 +560,198 @@ async def cleanup_old_pending_posts() -> int:
         )
         await db.commit()
         return cur.rowcount
+
+
+# ---------- STREAKS ----------
+
+async def touch_streak(telegram_id: int) -> dict:
+    """Регистрирует активность за сегодня и обновляет стрик.
+
+    Возвращает {current_streak, best_streak, is_new_day, prev_streak}.
+    is_new_day = True если это первая активность за сегодня (для триггера ачивок).
+    """
+    today = datetime.utcnow().date()
+    async with aiosqlite.connect(config.database_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT current_streak, best_streak, last_active_date "
+            "FROM user_streaks WHERE user_id = ?",
+            (telegram_id,),
+        ) as cur:
+            row = await cur.fetchone()
+
+        prev_streak = 0
+        is_new_day = True
+
+        if row is None:
+            new_streak = 1
+            new_best = 1
+        else:
+            prev_streak = row["current_streak"] or 0
+            last_str = row["last_active_date"]
+            last_date = None
+            if last_str:
+                try:
+                    last_date = datetime.fromisoformat(last_str).date()
+                except (ValueError, TypeError):
+                    last_date = None
+
+            if last_date == today:
+                # Уже отметились сегодня — стрик не меняется
+                is_new_day = False
+                new_streak = prev_streak
+            elif last_date and (today - last_date).days == 1:
+                # Подряд — продлеваем
+                new_streak = prev_streak + 1
+            else:
+                # Пропущен день — обнуление
+                new_streak = 1
+
+            new_best = max(row["best_streak"] or 0, new_streak)
+
+        await db.execute(
+            "INSERT INTO user_streaks (user_id, current_streak, best_streak, last_active_date) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "current_streak = excluded.current_streak, "
+            "best_streak = excluded.best_streak, "
+            "last_active_date = excluded.last_active_date",
+            (telegram_id, new_streak, new_best, today.isoformat()),
+        )
+        await db.commit()
+
+    return {
+        "current_streak": new_streak,
+        "best_streak": new_best,
+        "is_new_day": is_new_day,
+        "prev_streak": prev_streak,
+    }
+
+
+async def get_streak(telegram_id: int) -> int:
+    """Текущий стрик. Если последняя активность не вчера/не сегодня — 0."""
+    today = datetime.utcnow().date()
+    async with aiosqlite.connect(config.database_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT current_streak, last_active_date "
+            "FROM user_streaks WHERE user_id = ?",
+            (telegram_id,),
+        ) as cur:
+            row = await cur.fetchone()
+
+    if not row:
+        return 0
+    last_str = row["last_active_date"]
+    if not last_str:
+        return 0
+    try:
+        last_date = datetime.fromisoformat(last_str).date()
+    except (ValueError, TypeError):
+        return 0
+
+    diff = (today - last_date).days
+    if diff > 1:
+        return 0  # Стрик уже сломан
+    return row["current_streak"] or 0
+
+
+# ---------- ACHIEVEMENTS ----------
+
+async def unlock_achievement(telegram_id: int, code: str) -> bool:
+    """Разблокирует ачивку. Возвращает True если ачивка реально новая."""
+    async with aiosqlite.connect(config.database_path) as db:
+        try:
+            await db.execute(
+                "INSERT INTO achievements (user_id, code) VALUES (?, ?)",
+                (telegram_id, code),
+            )
+            await db.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            # Уже разблокирована
+            return False
+
+
+async def get_user_achievements(telegram_id: int) -> list[str]:
+    async with aiosqlite.connect(config.database_path) as db:
+        async with db.execute(
+            "SELECT code FROM achievements WHERE user_id = ? ORDER BY unlocked_at",
+            (telegram_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [r[0] for r in rows]
+
+
+async def has_achievement(telegram_id: int, code: str) -> bool:
+    async with aiosqlite.connect(config.database_path) as db:
+        async with db.execute(
+            "SELECT 1 FROM achievements WHERE user_id = ? AND code = ?",
+            (telegram_id, code),
+        ) as cur:
+            return (await cur.fetchone()) is not None
+
+
+async def log_threads_publication(telegram_id: int, posts_count: int = 1) -> int:
+    """Логирует факт публикации в Threads. Возвращает общее число публикаций после."""
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "INSERT INTO threads_post_log (user_id, posts_count) VALUES (?, ?)",
+            (telegram_id, posts_count),
+        )
+        await db.commit()
+        async with db.execute(
+            "SELECT COUNT(*) FROM threads_post_log WHERE user_id = ?",
+            (telegram_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
+
+async def count_threads_publications(telegram_id: int) -> int:
+    """Сколько раз юзер успешно публиковал в Threads."""
+    async with aiosqlite.connect(config.database_path) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM threads_post_log WHERE user_id = ?",
+            (telegram_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
+
+async def count_voice_storytellings(telegram_id: int) -> int:
+    """Сколько голосовых сторителлингов сделал юзер."""
+    async with aiosqlite.connect(config.database_path) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM generations "
+            "WHERE user_id = ? AND format IN ('storytelling_voice', 'storytelling_audio')",
+            (telegram_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
+
+async def count_user_generations(telegram_id: int) -> int:
+    """Общее число генераций юзера за всё время."""
+    async with aiosqlite.connect(config.database_path) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM generations WHERE user_id = ?",
+            (telegram_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
+
+async def count_successful_referrals(telegram_id: int) -> int:
+    """Сколько рефералов реально активировали промокод."""
+    async with aiosqlite.connect(config.database_path) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM referrals "
+            "WHERE referrer_id = ? AND rewarded_at IS NOT NULL",
+            (telegram_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
 
 
 async def get_referral_stats(referrer_id: int) -> dict:

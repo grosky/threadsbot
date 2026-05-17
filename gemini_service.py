@@ -21,9 +21,12 @@ from prompts import (
     STORYTELLING_PROMPT,
     STORYTELLING_SCHEMA,
     SYSTEM_PROMPT,
+    TRANSFORM_PROMPT,
+    TRANSFORM_SCHEMA,
     build_feed_analysis_message,
     build_profile_analysis_message,
     build_storytelling_message,
+    build_transform_message,
     build_user_message,
 )
 
@@ -58,6 +61,13 @@ _STORYTELLING_CONFIG = types.GenerateContentConfig(
     temperature=0.85,
     response_mime_type="application/json",
     response_schema=STORYTELLING_SCHEMA,
+)
+
+_TRANSFORM_CONFIG = types.GenerateContentConfig(
+    system_instruction=TRANSFORM_PROMPT,
+    temperature=0.8,
+    response_mime_type="application/json",
+    response_schema=TRANSFORM_SCHEMA,
 )
 
 _MODEL_NAME = "gemini-2.5-flash"
@@ -153,6 +163,26 @@ async def generate_storytelling_from_voice(
         model=_MODEL_NAME,
         contents=[user_msg, audio_part],
         config=_STORYTELLING_CONFIG,
+    )
+    return json.loads(response.text)
+
+
+async def transform_post(
+    profile: dict, original_post: str, instruction: str
+) -> dict:
+    """Переписывает пост по инструкции (жёстче / мягче / свободный фидбек).
+
+    Возвращает {post, summary}.
+    """
+    user_msg = build_transform_message(original_post, instruction, profile)
+    log.info(
+        "Transforming post: user=%s instruction='%s' len=%d",
+        profile.get("telegram_id"), instruction[:60], len(original_post),
+    )
+    response = await _client.aio.models.generate_content(
+        model=_MODEL_NAME,
+        contents=user_msg,
+        config=_TRANSFORM_CONFIG,
     )
     return json.loads(response.text)
 

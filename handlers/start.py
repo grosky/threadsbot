@@ -9,6 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, ReplyKeyboardRemove
 
+from achievements import REFERRAL_RELATED, check_and_award
 from config import config
 from database import (
     activate_promocode,
@@ -125,6 +126,11 @@ async def handle_promocode_input(
                 "Failed to notify referrer %s: %s",
                 reward["referrer_id"], e,
             )
+        # Проверяем ачивки реферера
+        try:
+            await check_and_award(reward["referrer_id"], bot, codes=REFERRAL_RELATED)
+        except Exception:
+            log.exception("Referral achievement check failed")
 
     await state.clear()
     await start_onboarding(message, state)

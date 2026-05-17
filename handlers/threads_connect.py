@@ -21,8 +21,10 @@ from database import (
     get_pending_post,
     get_threads_account,
     is_subscription_active,
+    log_threads_publication,
     mark_threads_post_sent,
     save_pending_post,
+    touch_streak,
 )
 from threads_api import (
     build_auth_url,
@@ -192,9 +194,9 @@ async def disconnect(callback: CallbackQuery) -> None:
 # ---------- ПУБЛИКАЦИЯ ----------
 
 def publish_button(post_text_id: str) -> InlineKeyboardMarkup:
-    """Кнопка «Опубликовать в Threads» — встраивается в результат генерации.
+    """Старая кнопка-одиночка (оставлена для обратной совместимости).
 
-    post_text_id — ключ в FSM data, по которому достанем текст поста.
+    Лучше использовать post_actions_keyboard — с публикацией + жёстче/мягче/доработать.
     """
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
@@ -202,6 +204,25 @@ def publish_button(post_text_id: str) -> InlineKeyboardMarkup:
             callback_data=f"publish:threads:{post_text_id}",
         ),
     ]])
+
+
+def post_actions_keyboard(post_key: str) -> InlineKeyboardMarkup:
+    """Полный набор кнопок под сгенерированным/написанным постом.
+
+    Используется и generation, и storytelling, и custom_post.
+    Хендлеры post:harder / post:softer / post:refine живут в generation.py.
+    """
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="📤 Опубликовать в Threads",
+            callback_data=f"publish:threads:{post_key}",
+        )],
+        [
+            InlineKeyboardButton(text="🔥 Жёстче", callback_data=f"post:harder:{post_key}"),
+            InlineKeyboardButton(text="😌 Мягче", callback_data=f"post:softer:{post_key}"),
+            InlineKeyboardButton(text="✏️ Доработать", callback_data=f"post:refine:{post_key}"),
+        ],
+    ])
 
 
 @router.callback_query(F.data.startswith("publish:threads:"))
@@ -280,6 +301,22 @@ async def publish_to_threads(callback: CallbackQuery, state: FSMContext) -> None
 
     posts_count = result["posts_count"]
     permalink = result["permalink"]
+
+    # Логируем публикацию для подсчёта ачивок
+    await log_threads_publication(user_id, posts_count)
+    # Стрик и ачивки
+    await touch_streak(user_id)
+    try:
+        from achievements import (
+            PUBLISH_RELATED,
+            STREAK_RELATED,
+            check_and_award,
+        )
+        from aiogram import Bot
+        bot_instance: Bot = callback.bot
+        await check_and_award(user_id, bot_instance, codes=PUBLISH_RELATED + STREAK_RELATED)
+    except Exception:
+        log.exception("Achievement check failed after publish")
 
     if posts_count == 1:
         suffix = "одним постом"

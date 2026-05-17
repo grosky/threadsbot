@@ -21,7 +21,7 @@ from database import (
 )
 from threads_api import split_for_threads
 
-from .threads_connect import publish_button, remember_post
+from .threads_connect import remember_post
 
 router = Router()
 log = logging.getLogger(__name__)

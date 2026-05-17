@@ -10,16 +10,23 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
+from achievements import (
+    GENERATION_RELATED,
+    STREAK_RELATED,
+    VOICE_RELATED,
+    check_and_award,
+)
 from config import DAILY_LIMIT
 from database import (
     can_generate_today,
     get_user,
     is_subscription_active,
     log_generation,
+    touch_streak,
 )
 from gemini_service import generate_storytelling_from_voice
 
-from .threads_connect import publish_button, remember_post
+from .threads_connect import post_actions_keyboard, remember_post
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -140,24 +147,31 @@ async def voice_received(message: Message, state: FSMContext, bot: Bot) -> None:
     post = html.escape(raw_post)
 
     await message.answer(
-        f"<b>🎧 Что я услышал:</b>\n<i>{heard}</i>\n\n"
-        f"<b>🪝 Хук:</b>\n<i>{hook}</i>"
+        f"🎧 <b>Что я услышал:</b>\n<i>{heard}</i>\n\n"
+        f"🪝 <b>Хук:</b>\n<i>{hook}</i>"
     )
 
     import time as _time
     post_key = f"v{int(_time.time())}"
     await remember_post(user_id, post_key, raw_post)
 
-    full = f"<b>📝 Пост</b>\n\n━━━━━━━━━━━━━━━━━\n\n{post}"
+    full = f"📝 <b>Пост</b>\n\n{post}"
     if len(full) > 4000:
         full = full[:4000] + "\n\n…(обрезано)"
-    await message.answer(full, reply_markup=publish_button(post_key))
+    await message.answer(full, reply_markup=post_actions_keyboard(post_key))
+
+    # Стрик + ачивки
+    await touch_streak(user_id)
+    await check_and_award(
+        user_id, bot,
+        codes=GENERATION_RELATED + VOICE_RELATED + STREAK_RELATED,
+    )
 
     _, used_after = await can_generate_today(user_id)
     remaining = max(0, DAILY_LIMIT - used_after)
     await message.answer(
         f"✅ Готово. Осталось сегодня: <b>{remaining}/{DAILY_LIMIT}</b>\n\n"
-        f"Хочешь ещё вариант — запиши новое голосовое или /menu."
+        f"Хочешь ещё — запиши новое голосовое или /menu."
     )
     await state.clear()
 
@@ -222,7 +236,7 @@ async def audio_file_received(message: Message, state: FSMContext, bot: Bot) -> 
     full = f"<b>📝 Пост</b>\n\n━━━━━━━━━━━━━━━━━\n\n{post}"
     if len(full) > 4000:
         full = full[:4000] + "\n\n…(обрезано)"
-    await message.answer(full, reply_markup=publish_button(post_key))
+    await message.answer(full, reply_markup=post_actions_keyboard(post_key))
 
     _, used_after = await can_generate_today(user_id)
     remaining = max(0, DAILY_LIMIT - used_after)
