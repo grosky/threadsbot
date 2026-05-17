@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lazy Threads — AI assistant for Threads creators</title>
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --fg: #f0f0f0;
+            --accent: #4a9eff;
+            --muted: #888;
+            --card: #1a1a1a;
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: var(--bg);
+            color: var(--fg);
+            margin: 0;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 4rem 1.5rem;
+        }
+        h1 {
+            font-size: 2.5rem;
+            margin: 0 0 0.5rem;
+            letter-spacing: -0.02em;
+        }
+        .tagline {
+            color: var(--muted);
+            font-size: 1.2rem;
+            margin-bottom: 3rem;
+        }
+        .card {
+            background: var(--card);
+            padding: 2rem;
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+            border: 1px solid #2a2a2a;
+        }
+        h2 {
+            font-size: 1.3rem;
+            margin: 0 0 0.8rem;
+        }
+        ul { padding-left: 1.2rem; }
+        li { margin-bottom: 0.4rem; }
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .footer {
+            margin-top: 3rem;
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧵 Lazy Threads</h1>
+        <p class="tagline">AI assistant for Threads content creators, delivered as a Telegram bot.</p>
+
+        <div class="card">
+            <h2>What it does</h2>
+            <ul>
+                <li>Generates Threads posts in 5 viral formats using Google Gemini</li>
+                <li>Turns voice notes into polished storytelling posts</li>
+                <li>Analyses Threads profile screenshots for packaging improvements</li>
+                <li>Publishes directly to Threads via the official Threads API (OAuth)</li>
+                <li>Breaks long posts into native Threads chains automatically</li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h2>How it uses Threads API</h2>
+            <ul>
+                <li><b>threads_basic</b> — to identify the authenticated user (id, username) after OAuth</li>
+                <li><b>threads_content_publish</b> — to create and publish posts on the user's behalf, only when explicitly triggered by the user clicking «Publish» in the bot</li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h2>Legal</h2>
+            <ul>
+                <li><a href="./privacy.html">Privacy Policy</a></li>
+                <li><a href="./terms.html">Terms of Service</a></li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h2>Try it</h2>
+            <p>Open the bot in Telegram: <a href="https://t.me/aithreadbot">@aithreadbot</a></p>
+        </div>
+
+        <p class="footer">© 2026 Lazy Threads. Not affiliated with Meta Platforms, Inc.</p>
+    </div>
+</body>
+</html>

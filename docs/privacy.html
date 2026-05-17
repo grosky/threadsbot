@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy — Lazy Threads</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: #0a0a0a;
+            color: #f0f0f0;
+            margin: 0;
+            line-height: 1.7;
+        }
+        .container {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 3rem 1.5rem;
+        }
+        h1 { font-size: 2rem; margin-bottom: 0.3rem; }
+        h2 { font-size: 1.3rem; margin-top: 2rem; margin-bottom: 0.5rem; }
+        .updated { color: #888; margin-bottom: 2rem; }
+        a { color: #4a9eff; }
+        ul { padding-left: 1.2rem; }
+        li { margin-bottom: 0.4rem; }
+        .back {
+            display: inline-block;
+            margin-bottom: 2rem;
+            color: #888;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="./" class="back">← Lazy Threads</a>
+        <h1>Privacy Policy</h1>
+        <p class="updated">Last updated: 17 May 2026</p>
+
+        <h2>1. Who we are</h2>
+        <p>
+            Lazy Threads (the «Service») is an AI assistant for Threads content creators,
+            delivered as a Telegram bot under the handle <a href="https://t.me/aithreadbot">@aithreadbot</a>.
+            The Service is operated by an independent developer and is not affiliated with
+            Meta Platforms, Inc.
+        </p>
+
+        <h2>2. What data we collect</h2>
+        <p>When you use the Service, we collect and store the following data:</p>
+        <ul>
+            <li><b>Telegram account data</b>: your Telegram user ID, username, first name — required to identify you across sessions.</li>
+            <li><b>Onboarding answers</b>: information you voluntarily provide about your niche, target audience, product, tone of voice, etc. Used solely to personalise generated posts.</li>
+            <li><b>Threads account data</b>: when you connect Threads via OAuth, we store your Threads user ID, username and access token. The access token is encrypted at rest using symmetric encryption (Fernet).</li>
+            <li><b>Generated content</b>: posts created by the AI on your behalf, cached for up to 24 hours so you can publish them later.</li>
+            <li><b>Usage logs</b>: timestamps of generations, publications and other actions, used for daily limits and analytics.</li>
+        </ul>
+
+        <h2>3. How we use your data</h2>
+        <ul>
+            <li>To generate posts tailored to your niche and audience</li>
+            <li>To publish posts to Threads when you explicitly tap «Publish»</li>
+            <li>To enforce subscription limits and prevent abuse</li>
+            <li>To send you transactional notifications (e.g. subscription status, referral rewards)</li>
+        </ul>
+        <p>
+            We <b>never sell your data</b>, <b>never share it with advertisers</b>, and
+            <b>never use it to train AI models</b>.
+        </p>
+
+        <h2>4. Third-party services</h2>
+        <p>The Service interacts with the following third parties on your behalf:</p>
+        <ul>
+            <li><b>Google Gemini API</b> — for AI text generation. Your prompts (onboarding info + post topic) are sent to Google. See <a href="https://policies.google.com/privacy">Google Privacy Policy</a>.</li>
+            <li><b>Meta Threads API</b> — for OAuth authentication and content publishing. See <a href="https://privacycenter.instagram.com/policy">Meta Privacy Policy</a>.</li>
+            <li><b>Telegram Bot API</b> — as the messaging delivery channel. See <a href="https://telegram.org/privacy">Telegram Privacy Policy</a>.</li>
+            <li><b>Railway</b> — for application hosting and database storage.</li>
+        </ul>
+
+        <h2>5. Data storage and security</h2>
+        <ul>
+            <li>Data is stored in a SQLite database on a Railway server</li>
+            <li>OAuth access tokens are encrypted at rest</li>
+            <li>Access to the database is restricted to the application server</li>
+            <li>HTTPS is used for all OAuth callbacks</li>
+        </ul>
+
+        <h2>6. Data retention</h2>
+        <ul>
+            <li>Account data persists until you disconnect Threads or stop using the Service</li>
+            <li>Generated post cache auto-deletes after 24 hours</li>
+            <li>You may request full deletion of all your data at any time (see Contact below)</li>
+        </ul>
+
+        <h2>7. Your rights</h2>
+        <p>You have the right to:</p>
+        <ul>
+            <li>Request a copy of all data we hold about you</li>
+            <li>Request correction or deletion of your data</li>
+            <li>Revoke Threads access via the <code>/menu</code> command in the bot or via Threads settings</li>
+            <li>Stop using the Service at any time</li>
+        </ul>
+
+        <h2>8. Children</h2>
+        <p>The Service is not intended for users under 18 years of age.</p>
+
+        <h2>9. Changes to this policy</h2>
+        <p>
+            We may update this Privacy Policy from time to time. Significant changes will
+            be communicated via the bot.
+        </p>
+
+        <h2>10. Contact</h2>
+        <p>
+            For privacy questions, data requests or deletion: contact the developer via
+            Telegram: <a href="https://t.me/grosky">@grosky</a>.
+        </p>
+    </div>
+</body>
+</html>
