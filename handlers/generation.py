@@ -129,17 +129,16 @@ async def start_generation(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(GenerateStates.choosing_format, F.data == "fmt:help")
 async def show_formats_help(callback: CallbackQuery) -> None:
     """Карточки всех форматов с описанием, когда юзать, примером хука."""
-    lines = ["📚 <b>Сравнение форматов</b>", ""]
+    lines = ["<b>Форматы постов</b>", ""]
     for key, info in FORMAT_DETAILS.items():
         lines.extend([
             f"{info['emoji']} <b>{info['name']}</b>",
-            f"<i>{info['tagline']}</i>",
-            f"🎯 Когда: {info['when']}",
-            f"💡 Пример хука: «{info['hook_example']}»",
-            f"{info['intensity']}",
+            info['tagline'] + ".",
+            f"Когда: {info['when'].lower()}.",
+            f"Пример: «{info['hook_example']}»",
             "",
         ])
-    lines.append("<i>Жми на любой формат ниже чтобы продолжить.</i>")
+    lines.append("Выбери формат ниже.")
 
     await callback.answer()
     text = "\n".join(lines)
