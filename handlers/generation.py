@@ -24,8 +24,10 @@ from config import DAILY_LIMIT
 from database import (
     can_generate_today,
     get_user,
+    has_access,
     is_subscription_active,
     log_generation,
+    mark_free_trial_used,
     touch_streak,
 )
 from gemini_service import generate_posts, transform_post
@@ -84,10 +86,12 @@ def topic_keyboard() -> InlineKeyboardMarkup:
 async def start_generation(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
 
-    if not await is_subscription_active(user_id):
+    access_ok, reason = await has_access(user_id)
+    if not access_ok:
         await callback.answer()
         await callback.message.answer(
-            "❌ Подписка неактивна. Активируй промокод через /start."
+            "🔓 Бесплатная генерация уже использована.\n\n"
+            "Оформи подписку чтобы продолжить — /start → «💎 Оформить подписку»."
         )
         return
 
@@ -109,9 +113,14 @@ async def start_generation(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     await callback.answer()
+    trial_note = (
+        "\n\n<i>🎁 Это твоя бесплатная пробная генерация.</i>"
+        if reason == "free_trial" else ""
+    )
     await callback.message.answer(
         "🎯 <b>Выбери формат поста</b>\n\n"
-        "Каждый формат бьёт по своему — нажми «❓ Какой выбрать?» если не уверен.",
+        "Каждый формат бьёт по своему — нажми «❓ Какой выбрать?» если не уверен."
+        + trial_note,
         reply_markup=formats_keyboard(),
     )
     await state.set_state(GenerateStates.choosing_format)
@@ -206,6 +215,15 @@ async def _do_generate(
     state: FSMContext,
     bot: Bot,
 ) -> None:
+    # Двойная проверка доступа
+    access_ok, reason = await has_access(user_id)
+    if not access_ok:
+        await message.answer(
+            "🔓 Доступ закончился. /start → «💎 Оформить подписку»."
+        )
+        await state.clear()
+        return
+
     can_gen, _ = await can_generate_today(user_id)
     if not can_gen:
         await message.answer("⏳ Лимит исчерпан, возвращайся завтра.")
@@ -262,6 +280,13 @@ async def _do_generate(
     await touch_streak(user_id)
     await check_and_award(user_id, bot, codes=GENERATION_RELATED + STREAK_RELATED)
 
+    # Если это был free trial — помечаем использованным и показываем paywall
+    if reason == "free_trial":
+        await mark_free_trial_used(user_id)
+        await _send_paywall_after_trial(message)
+        await state.clear()
+        return
+
     _, used_after = await can_generate_today(user_id)
     if user_id == _admin_id():
         suffix = "∞ (admin)"
@@ -273,6 +298,34 @@ async def _do_generate(
         f"Жми /menu чтобы вернуться."
     )
     await state.clear()
+
+
+async def _send_paywall_after_trial(message: Message) -> None:
+    """Показываем paywall после первой бесплатной генерации."""
+    from config import config as _cfg
+    rows = []
+    if _cfg.tribute_buy_button_enabled:
+        rows.append([InlineKeyboardButton(
+            text="💎 Оформить подписку",
+            url=_cfg.tribute_subscription_url,
+        )])
+    rows.append([InlineKeyboardButton(
+        text="🎁 У меня есть промокод",
+        callback_data="welcome:promo",
+    )])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+
+    await message.answer(
+        "🎉 <b>Это была твоя бесплатная генерация</b>\n\n"
+        "Понравилось? Оформи подписку и получи:\n\n"
+        "✅ <b>4 генерации в день</b> в 5 форматах\n"
+        "✅ <b>Голосовой сторителлинг</b>\n"
+        "✅ <b>Авто-публикация в Threads</b>\n"
+        "✅ Анализ профиля и чужих лент\n"
+        "✅ Доработка постов (жёстче / мягче / по фидбеку)\n\n"
+        "Можно отменить в любой момент.",
+        reply_markup=kb,
+    )
 
 
 def _admin_id() -> int:

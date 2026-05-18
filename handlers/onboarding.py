@@ -10,7 +10,12 @@ from aiogram.types import (
     Message,
 )
 
-from database import mark_onboarding_complete, update_profile_field
+from database import (
+    can_use_free_trial,
+    is_subscription_active,
+    mark_onboarding_complete,
+    update_profile_field,
+)
 
 from .menu import show_main_menu
 
@@ -177,10 +182,23 @@ async def on_social_proof(message: Message, state: FSMContext) -> None:
 
 
 async def _complete_onboarding(message: Message, state: FSMContext) -> None:
-    await mark_onboarding_complete(message.from_user.id)
+    user_id = message.from_user.id
+    await mark_onboarding_complete(user_id)
     await state.clear()
-    await message.answer(
-        "🎉 <b>Профиль настроен!</b>\n\n"
-        "Теперь можно генерить посты. Тыкай в кнопку ниже:"
-    )
+
+    # Если нет подписки но есть бесплатный trial — приглашаем сразу сгенерить
+    sub_active = await is_subscription_active(user_id)
+    trial_available = await can_use_free_trial(user_id)
+
+    if not sub_active and trial_available:
+        await message.answer(
+            "🎉 <b>Профиль настроен!</b>\n\n"
+            "🎁 Твоя <b>бесплатная генерация</b> готова. "
+            "Открой меню и жми «🎯 Сгенерить» — увидишь как это работает."
+        )
+    else:
+        await message.answer(
+            "🎉 <b>Профиль настроен!</b>\n\n"
+            "Теперь можно генерить посты:"
+        )
     await show_main_menu(message)

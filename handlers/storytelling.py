@@ -20,8 +20,10 @@ from config import DAILY_LIMIT
 from database import (
     can_generate_today,
     get_user,
+    has_access,
     is_subscription_active,
     log_generation,
+    mark_free_trial_used,
     touch_streak,
 )
 from gemini_service import generate_storytelling_from_voice
@@ -43,10 +45,11 @@ class StorytellingStates(StatesGroup):
 async def start_storytelling(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
 
-    if not await is_subscription_active(user_id):
+    access_ok, _ = await has_access(user_id)
+    if not access_ok:
         await callback.answer()
         await callback.message.answer(
-            "❌ Подписка неактивна. Активируй промокод через /start."
+            "🔓 Бесплатная генерация уже использована. /start → «💎 Оформить подписку»."
         )
         return
 
@@ -140,6 +143,11 @@ async def voice_received(message: Message, state: FSMContext, bot: Bot) -> None:
 
     await log_generation(user_id, "storytelling_voice", None)
     await status_msg.delete()
+
+    # Если был free trial — помечаем использованным
+    _, reason = await has_access(user_id)
+    if reason == "free_trial":
+        await mark_free_trial_used(user_id)
 
     heard = html.escape(str(result.get("heard", "—")))
     hook = html.escape(str(result.get("hook_line", "—")))

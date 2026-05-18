@@ -145,10 +145,21 @@ PROFILE_FIELDS = {
 }
 
 
+async def _migrate_users_columns(db: aiosqlite.Connection) -> None:
+    """Добавляет колонки в users, если их ещё нет (для совместимости с прод-БД)."""
+    async with db.execute("PRAGMA table_info(users)") as cur:
+        cols = {row[1] for row in await cur.fetchall()}
+    if "free_trial_used" not in cols:
+        await db.execute(
+            "ALTER TABLE users ADD COLUMN free_trial_used INTEGER DEFAULT 0"
+        )
+
+
 async def init_db() -> None:
-    """Создаёт таблицы при первом запуске."""
+    """Создаёт таблицы при первом запуске + миграции колонок."""
     async with aiosqlite.connect(config.database_path) as db:
         await db.executescript(SCHEMA)
+        await _migrate_users_columns(db)
         await db.commit()
 
 
@@ -207,6 +218,39 @@ async def is_subscription_active(telegram_id: int) -> bool:
         return False
     # naive datetimes хранятся как UTC
     return expires > datetime.utcnow()
+
+
+async def can_use_free_trial(telegram_id: int) -> bool:
+    """Доступна ли бесплатная пробная генерация (одна разовая)."""
+    user = await get_user(telegram_id)
+    if not user:
+        return False
+    # SQLite вернёт 0 или 1
+    return not bool(user.get("free_trial_used"))
+
+
+async def mark_free_trial_used(telegram_id: int) -> None:
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "UPDATE users SET free_trial_used = 1 WHERE telegram_id = ?",
+            (telegram_id,),
+        )
+        await db.commit()
+
+
+async def has_access(telegram_id: int) -> tuple[bool, str]:
+    """Имеет ли юзер доступ к платным фичам.
+
+    Возвращает (access, reason):
+    - (True, "subscription") — есть подписка
+    - (True, "free_trial") — есть неиспользованный free trial
+    - (False, "none") — нет доступа
+    """
+    if await is_subscription_active(telegram_id):
+        return True, "subscription"
+    if await can_use_free_trial(telegram_id):
+        return True, "free_trial"
+    return False, "none"
 
 
 # ---------- PROMOCODES ----------

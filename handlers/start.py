@@ -1,22 +1,30 @@
-"""/start, активация промокода, /promo для админа."""
+"""/start — welcome screen, free trial flow, paywall, промокод как secondary path."""
 from __future__ import annotations
 
 import logging
 
-from aiogram import Bot, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, ReplyKeyboardRemove
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    ReplyKeyboardRemove,
+)
 
 from achievements import REFERRAL_RELATED, check_and_award
 from config import config
 from database import (
     activate_promocode,
+    can_use_free_trial,
     consume_referral_reward,
     create_promocode,
     create_user,
     get_user,
+    has_access,
     is_subscription_active,
     set_referrer_if_new,
 )
@@ -32,8 +40,9 @@ class StartStates(StatesGroup):
     waiting_promocode = State()
 
 
+# ---------- DEEP LINK ----------
+
 def _parse_referrer_id(payload: str | None) -> int | None:
-    """Извлекает referrer_id из deep-link payload вида 'ref_12345'."""
     if not payload or not payload.startswith("ref_"):
         return None
     try:
@@ -42,6 +51,69 @@ def _parse_referrer_id(payload: str | None) -> int | None:
         return None
 
 
+# ---------- WELCOME + PAYWALL ----------
+
+def welcome_keyboard(show_trial: bool = True) -> InlineKeyboardMarkup:
+    rows = []
+    if show_trial:
+        rows.append([InlineKeyboardButton(
+            text="🎯 Попробовать бесплатно",
+            callback_data="welcome:try",
+        )])
+    if config.tribute_buy_button_enabled:
+        rows.append([InlineKeyboardButton(
+            text="💎 Оформить подписку",
+            url=config.tribute_subscription_url,
+        )])
+    rows.append([InlineKeyboardButton(
+        text="🎁 У меня есть промокод",
+        callback_data="welcome:promo",
+    )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+WELCOME_TEXT = (
+    "🧵 <b>Lazy Threads</b>\n\n"
+    "AI-помощник для авторов Threads. Помогаю писать вирусные посты, "
+    "анализировать профили и публиковать всё в один тап.\n\n"
+    "<b>Что я умею:</b>\n"
+    "🎯 Генерирую посты в 5 виральных форматах (Gemini 2.5)\n"
+    "🎙 Превращаю голосовое в живой сторителлинг\n"
+    "📸 Разбираю упаковку твоего профиля\n"
+    "🔍 Анализирую ленты конкурентов и адаптирую под тебя\n"
+    "📤 Публикую напрямую в Threads (нужно подключение)\n\n"
+    "<b>Кому подойдёт:</b>\n"
+    "Экспертам, маркетологам, фрилансерам, SMM-щикам — всем, "
+    "кто хочет расти в Threads без многочасовой возни с текстом.\n\n"
+    "🎁 <b>Первая генерация — бесплатно.</b> Понравится — оформишь подписку."
+)
+
+
+PAYWALL_TEXT = (
+    "🔓 <b>Бесплатная генерация уже использована</b>\n\n"
+    "Чтобы продолжить, оформи подписку. Получишь:\n\n"
+    "✅ <b>4 генерации в день</b> в 5 форматах\n"
+    "✅ <b>Голосовой сторителлинг</b> — наговариваешь, бот собирает пост\n"
+    "✅ <b>Авто-публикация в Threads</b> в один тап\n"
+    "✅ <b>Анализ профиля и чужих лент</b>\n"
+    "✅ Все будущие фичи бесплатно\n\n"
+    "Можно отменить в любой момент через @tribute."
+)
+
+
+async def _show_welcome(message: Message, user_id: int) -> None:
+    trial_ok = await can_use_free_trial(user_id)
+    if trial_ok:
+        text = WELCOME_TEXT
+        kb = welcome_keyboard(show_trial=True)
+    else:
+        text = PAYWALL_TEXT
+        kb = welcome_keyboard(show_trial=False)
+    await message.answer(text, reply_markup=kb)
+
+
+# ---------- /start ----------
+
 @router.message(CommandStart())
 async def handle_start(
     message: Message, command: CommandObject, state: FSMContext
@@ -49,7 +121,6 @@ async def handle_start(
     await state.clear()
     user_tg = message.from_user
 
-    # Создаём юзера ДО привязки реферера (для гонок при первом /start)
     await create_user(user_tg.id, user_tg.username, user_tg.first_name or "")
 
     referrer_id = _parse_referrer_id(command.args)
@@ -59,27 +130,69 @@ async def handle_start(
             log.info("Linked referral: invitee=%s referrer=%s", user_tg.id, referrer_id)
 
     user = await get_user(user_tg.id)
+    sub_active = await is_subscription_active(user_tg.id)
 
-    if not await is_subscription_active(user_tg.id):
-        await message.answer(
-            f"Привет, {user_tg.first_name or 'друг'}!\n\n"
-            "Это AI-генератор вирусных постов для Threads. "
-            "Для активации введи промокод (приходит в чеке после покупки промт-пака):",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        await state.set_state(StartStates.waiting_promocode)
+    # 1. Подписка активна — сразу в меню (или дозаполнить онбординг)
+    if sub_active:
+        if not user or not user.get("onboarding_complete"):
+            await message.answer(
+                f"С возвращением, {user_tg.first_name or 'друг'}! Подписка активна.\n\n"
+                "Прежде чем начать — давай настроим профиль (~5 минут)."
+            )
+            await start_onboarding(message, state)
+        else:
+            await show_main_menu(message)
         return
 
-    # Подписка активна
-    if not user or not user.get("onboarding_complete"):
-        await message.answer(
-            f"С возвращением, {user_tg.first_name or 'друг'}! Подписка активна.\n\n"
-            "Прежде чем начать генерить — давай настроим профиль (~5 минут)."
-        )
-        await start_onboarding(message, state)
-    else:
-        await show_main_menu(message)
+    # 2. Нет подписки — welcome screen или paywall
+    await _show_welcome(message, user_tg.id)
 
+
+# ---------- WELCOME CALLBACKS ----------
+
+@router.callback_query(F.data == "welcome:try")
+async def start_free_trial(callback: CallbackQuery, state: FSMContext) -> None:
+    """Бесплатная пробная генерация. Если онбординга нет — сначала пройти его."""
+    user_id = callback.from_user.id
+    await callback.answer()
+
+    if not await can_use_free_trial(user_id):
+        await callback.message.answer(
+            "Бесплатная генерация уже использована.",
+            reply_markup=welcome_keyboard(show_trial=False),
+        )
+        return
+
+    user = await get_user(user_id)
+    if not user or not user.get("onboarding_complete"):
+        await callback.message.answer(
+            "🚀 <b>Поехали!</b>\n\n"
+            "Сначала расскажи о себе — без этого посты будут общими.\n"
+            "8 коротких вопросов, ~3 минуты.\n\n"
+            "После онбординга сразу сгенерим первый бесплатный пост."
+        )
+        await start_onboarding(callback.message, state)
+    else:
+        # Онбординг уже пройден — сразу к меню (там можно жать «Сгенерить»)
+        await callback.message.answer(
+            "🎁 <b>Один бесплатный пост — твой</b>\n\n"
+            "Открой меню и жми «🎯 Сгенерить» — это будет твоя бесплатная генерация."
+        )
+        await show_main_menu(callback.message)
+
+
+@router.callback_query(F.data == "welcome:promo")
+async def start_promo_input(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await callback.message.answer(
+        "🎁 <b>Активация промокода</b>\n\n"
+        "Введи код одним сообщением:",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await state.set_state(StartStates.waiting_promocode)
+
+
+# ---------- ПРОМОКОД ----------
 
 @router.message(Command("promo"))
 async def handle_promo_command(message: Message, state: FSMContext) -> None:
@@ -89,7 +202,7 @@ async def handle_promo_command(message: Message, state: FSMContext) -> None:
     code = await create_promocode(duration_days=30)
     await message.answer(
         f"Новый промокод на 30 дней:\n\n<code>{code}</code>\n\n"
-        "Передай покупателю — он введёт его после /start."
+        "Передай покупателю — он введёт его в боте через «🎁 У меня есть промокод»."
     )
 
 
@@ -105,12 +218,19 @@ async def handle_promocode_input(
     user_id = message.from_user.id
     ok, msg = await activate_promocode(code, user_id)
     if not ok:
-        await message.answer(f"❌ {msg}\n\nПопробуй ещё раз или напиши автору.")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="🔙 Назад к выбору",
+                callback_data="welcome:back",
+            ),
+        ]])
+        await message.answer(f"❌ {msg}\n\nПопробуй ещё раз или вернись:", reply_markup=kb)
         return
 
-    await message.answer(f"✅ {msg}\n\nТеперь настроим твой профиль.")
+    await message.answer(f"✅ {msg}")
+    await state.clear()
 
-    # Начисляем реферальный бонус приглашающему (если есть и ещё не выплачен)
+    # Реферальный бонус приглашающему
     reward = await consume_referral_reward(user_id)
     if reward:
         try:
@@ -121,16 +241,23 @@ async def handle_promocode_input(
                 f"Действует до: <b>{reward['new_expires_at'].strftime('%d.%m.%Y')}</b>",
             )
         except Exception as e:
-            # Не падаем если реферер заблокировал бота / удалил аккаунт
-            log.warning(
-                "Failed to notify referrer %s: %s",
-                reward["referrer_id"], e,
-            )
-        # Проверяем ачивки реферера
+            log.warning("Failed to notify referrer %s: %s", reward["referrer_id"], e)
         try:
             await check_and_award(reward["referrer_id"], bot, codes=REFERRAL_RELATED)
         except Exception:
             log.exception("Referral achievement check failed")
 
+    # После активации — если онбординга нет, пройди его
+    user = await get_user(user_id)
+    if not user or not user.get("onboarding_complete"):
+        await message.answer("Теперь настроим твой профиль.")
+        await start_onboarding(message, state)
+    else:
+        await show_main_menu(message)
+
+
+@router.callback_query(F.data == "welcome:back")
+async def back_to_welcome(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await start_onboarding(message, state)
+    await callback.answer()
+    await _show_welcome(callback.message, callback.from_user.id)

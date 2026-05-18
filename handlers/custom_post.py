@@ -38,7 +38,8 @@ async def start_custom_post(callback: CallbackQuery, state: FSMContext) -> None:
     if not await is_subscription_active(user_id):
         await callback.answer()
         await callback.message.answer(
-            "❌ Подписка неактивна. Активируй промокод через /start."
+            "🔓 «Свой пост» доступен только по подписке.\n"
+            "/start → «💎 Оформить подписку»."
         )
         return
 
