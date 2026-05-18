@@ -219,7 +219,7 @@ async def show_subscription(callback: CallbackQuery) -> None:
                 f"Действует до: <b>{expires.strftime('%d.%m.%Y')}</b>\n"
                 f"Осталось дней: <b>{days_left}</b>"
             )
-            if days_left < 7 and config.tribute_enabled:
+            if days_left < 7 and config.tribute_buy_button_enabled:
                 text += "\n\n⏰ Подписка скоро кончится — продли заранее."
         except (ValueError, TypeError):
             text = "💎 Подписка активна (не удалось распарсить дату)."
@@ -231,7 +231,7 @@ async def show_subscription(callback: CallbackQuery) -> None:
 
     # Кнопка покупки/продления через Tribute
     kb = None
-    if config.tribute_enabled:
+    if config.tribute_buy_button_enabled:
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(
                 text="💎 Купить / продлить",

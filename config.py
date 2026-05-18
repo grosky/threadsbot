@@ -75,8 +75,13 @@ class Config:
 
     @property
     def tribute_enabled(self) -> bool:
-        """Tribute-оплаты доступны только если есть API key + ссылка на продукт."""
-        return bool(self.tribute_api_key and self.tribute_subscription_url)
+        """Webhook Tribute активен если есть API key (для проверки подписи)."""
+        return bool(self.tribute_api_key)
+
+    @property
+    def tribute_buy_button_enabled(self) -> bool:
+        """Кнопка «Купить» показывается только если есть URL продукта."""
+        return bool(self.tribute_subscription_url)
 
 
 config = Config.from_env()
