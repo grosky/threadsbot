@@ -21,6 +21,9 @@ class Config:
     encryption_key: str
     # Порт для HTTP-сервера OAuth callback. Railway передаёт через PORT.
     port: int
+    # Tribute (оплаты)
+    tribute_api_key: str
+    tribute_subscription_url: str
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -33,6 +36,8 @@ class Config:
         meta_redirect_uri = os.getenv("META_REDIRECT_URI", "").strip()
         encryption_key = os.getenv("ENCRYPTION_KEY", "").strip()
         port_str = os.getenv("PORT", "8080").strip()
+        tribute_api_key = os.getenv("TRIBUTE_API_KEY", "").strip()
+        tribute_subscription_url = os.getenv("TRIBUTE_SUBSCRIPTION_URL", "").strip()
 
         missing = []
         if not bot_token:
@@ -54,6 +59,8 @@ class Config:
             meta_redirect_uri=meta_redirect_uri,
             encryption_key=encryption_key,
             port=int(port_str),
+            tribute_api_key=tribute_api_key,
+            tribute_subscription_url=tribute_subscription_url,
         )
 
     @property
@@ -65,6 +72,11 @@ class Config:
             and self.meta_redirect_uri
             and self.encryption_key
         )
+
+    @property
+    def tribute_enabled(self) -> bool:
+        """Tribute-оплаты доступны только если есть API key + ссылка на продукт."""
+        return bool(self.tribute_api_key and self.tribute_subscription_url)
 
 
 config = Config.from_env()

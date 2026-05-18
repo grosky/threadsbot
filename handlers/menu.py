@@ -219,16 +219,28 @@ async def show_subscription(callback: CallbackQuery) -> None:
                 f"Действует до: <b>{expires.strftime('%d.%m.%Y')}</b>\n"
                 f"Осталось дней: <b>{days_left}</b>"
             )
+            if days_left < 7 and config.tribute_enabled:
+                text += "\n\n⏰ Подписка скоро кончится — продли заранее."
         except (ValueError, TypeError):
             text = "💎 Подписка активна (не удалось распарсить дату)."
     else:
         text = (
             "❌ <b>Подписка неактивна</b>\n\n"
-            "Активируй промокод через /start или напиши автору для продления."
+            "Оформи подписку через Tribute или активируй промокод через /start."
         )
 
+    # Кнопка покупки/продления через Tribute
+    kb = None
+    if config.tribute_enabled:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="💎 Купить / продлить",
+                url=config.tribute_subscription_url,
+            ),
+        ]])
+
     await callback.answer()
-    await callback.message.answer(text)
+    await callback.message.answer(text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "action:achievements")

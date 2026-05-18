@@ -23,6 +23,7 @@ from threads_api import (
     get_me,
     verify_state,
 )
+from tribute_webhook import handle_tribute_webhook
 
 log = logging.getLogger(__name__)
 
@@ -203,6 +204,7 @@ def build_app(bot: Bot) -> web.Application:
     app.router.add_get("/auth/threads/callback", handle_threads_callback)
     app.router.add_post("/auth/threads/deauthorize", handle_deauthorize)
     app.router.add_post("/auth/threads/data-deletion", handle_data_deletion)
+    app.router.add_post("/webhooks/tribute", handle_tribute_webhook)
     return app
 
 

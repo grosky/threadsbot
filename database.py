@@ -228,6 +228,45 @@ async def create_promocode(duration_days: int = 30) -> str:
     return code
 
 
+async def extend_subscription_days(telegram_id: int, days: int) -> datetime:
+    """Продлевает подписку на N дней.
+
+    Если активна — добавляем к концу периода.
+    Если истекла или нет — стартуем с сегодня.
+    Возвращает новую дату истечения.
+    """
+    now = datetime.utcnow()
+    user = await get_user(telegram_id)
+    base = now
+    if user and user.get("subscription_expires_at"):
+        try:
+            current = datetime.fromisoformat(user["subscription_expires_at"])
+            if current > now:
+                base = current
+        except (ValueError, TypeError):
+            pass
+    new_expires = base + timedelta(days=days)
+
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "UPDATE users SET subscription_expires_at = ? WHERE telegram_id = ?",
+            (new_expires.isoformat(), telegram_id),
+        )
+        await db.commit()
+    return new_expires
+
+
+async def cancel_subscription_renewal(telegram_id: int) -> None:
+    """Помечает что юзер отменил продление в Tribute.
+
+    Подписку не трогаем — она доработает до конца оплаченного периода.
+    Можно использовать для уведомлений «вы отменили, действует до X».
+    """
+    # Сейчас просто ничего не делаем кроме лога — для будущей фичи можно
+    # добавить колонку cancellation_pending в users.
+    pass
+
+
 async def activate_promocode(code: str, telegram_id: int) -> tuple[bool, str]:
     """Активирует промокод. Возвращает (success, user_facing_message)."""
     async with aiosqlite.connect(config.database_path) as db:

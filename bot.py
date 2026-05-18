@@ -45,15 +45,17 @@ async def main() -> None:
     dp = Dispatcher()
     setup_routers(dp)
 
-    # HTTP-сервер для OAuth (Threads) — параллельно с polling
+    # HTTP-сервер для OAuth (Threads) и/или Tribute webhook'а
     http_runner = None
-    if config.threads_enabled:
-        log.info("Threads-фичи активны, запускаю HTTP-сервер на порту %d", config.port)
+    if config.threads_enabled or config.tribute_enabled:
+        log.info(
+            "HTTP-сервер запускается на порту %d (threads=%s, tribute=%s)",
+            config.port, config.threads_enabled, config.tribute_enabled,
+        )
         http_runner = await start_http_server(bot)
     else:
         log.warning(
-            "META_APP_ID/SECRET/REDIRECT_URI/ENCRYPTION_KEY не заданы — "
-            "Threads-фичи отключены, HTTP-сервер не запускаю"
+            "Ни Threads ни Tribute не настроены — HTTP-сервер не запускается"
         )
 
     # Фоновая чистка устаревших pending_posts
