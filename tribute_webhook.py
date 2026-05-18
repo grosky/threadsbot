@@ -24,6 +24,7 @@ from config import config
 from database import (
     create_user,
     extend_subscription_days,
+    log_payment,
 )
 
 log = logging.getLogger(__name__)
@@ -78,6 +79,38 @@ def _extract_telegram_user_id(payload: dict) -> Optional[int]:
                     pass
 
     return None
+
+
+def _extract_amount_and_currency(payload: dict) -> tuple[Optional[int], str]:
+    """Извлекает сумму платежа в копейках/центах и валюту.
+
+    Tribute шлёт сумму либо в целых рублях, либо в копейках. Нормализуем в копейки.
+    """
+    # Прямые поля
+    raw_amount = None
+    for key in ("amount", "price", "sum", "total"):
+        v = payload.get(key)
+        if v is not None:
+            raw_amount = v
+            break
+
+    currency = (payload.get("currency") or payload.get("currency_code") or "RUB").upper()
+
+    if raw_amount is None:
+        return None, currency
+
+    try:
+        # Если float — считаем что это рубли, переводим в копейки
+        if isinstance(raw_amount, float):
+            return int(round(raw_amount * 100)), currency
+        amount_int = int(raw_amount)
+        # Эвристика: если число подозрительно маленькое (<10000), это рубли;
+        # если большое (>=10000) — уже копейки. 590 рублей = 59000 копеек —
+        # граница нормальная.
+        # Tribute обычно шлёт в копейках, поэтому дефолт: копейки
+        return amount_int, currency
+    except (TypeError, ValueError):
+        return None, currency
 
 
 def _extract_period_days(payload: dict) -> int:
@@ -170,14 +203,24 @@ async def _handle_subscription(bot: Bot, payload: dict) -> web.Response:
         log.warning("Tribute subscription: no telegram_user_id in payload=%s", payload)
         return web.json_response({"error": "no_user_id"}, status=400)
 
-    # Создаём пользователя если не было (юзер может оплатить до /start в боте)
     await create_user(user_id, username=None, first_name="")
 
     days = _extract_period_days(payload)
+    amount, currency = _extract_amount_and_currency(payload)
     new_expires = await extend_subscription_days(user_id, days)
+
+    # Логируем платёж для партнёрской статистики
+    await log_payment(
+        user_id=user_id,
+        amount_kopecks=amount,
+        currency=currency,
+        period_days=days,
+        event_type="subscription",
+    )
+
     log.info(
-        "Tribute subscription: user=%s extended by %d days, new expires=%s",
-        user_id, days, new_expires.isoformat(),
+        "Tribute subscription: user=%s amount=%s %s days=%d expires=%s",
+        user_id, amount, currency, days, new_expires.isoformat(),
     )
 
     try:
@@ -203,13 +246,21 @@ async def _handle_digital_product(bot: Bot, payload: dict) -> web.Response:
 
     await create_user(user_id, username=None, first_name="")
 
-    # Для цифрового продукта пробуем достать длительность доступа из metadata.
-    # Если нет — дефолт 30 дней.
     days = _extract_period_days(payload)
+    amount, currency = _extract_amount_and_currency(payload)
     new_expires = await extend_subscription_days(user_id, days)
+
+    await log_payment(
+        user_id=user_id,
+        amount_kopecks=amount,
+        currency=currency,
+        period_days=days,
+        event_type="digital_product",
+    )
+
     log.info(
-        "Tribute digital product: user=%s granted %d days, new expires=%s",
-        user_id, days, new_expires.isoformat(),
+        "Tribute digital product: user=%s amount=%s %s days=%d",
+        user_id, amount, currency, days,
     )
 
     try:

@@ -9,7 +9,13 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, Message
 
 from config import config
-from database import REFERRAL_BONUS_DAYS, get_referral_stats, get_source_stats
+from database import (
+    PARTNER_COMMISSION_PERCENT,
+    REFERRAL_BONUS_DAYS,
+    get_referral_stats,
+    get_revenue_stats,
+    get_source_stats,
+)
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -104,48 +110,85 @@ async def cmd_utm(message: Message, command: CommandObject, bot: Bot) -> None:
     )
 
 
+def _format_rub(kopecks: int) -> str:
+    """5900 копеек → '59 ₽', 59000 → '590 ₽'."""
+    rub = (kopecks or 0) / 100
+    if rub == int(rub):
+        return f"{int(rub):,}".replace(",", " ") + " ₽"
+    return f"{rub:.2f}".replace(".", ",") + " ₽"
+
+
 @router.message(Command("stats"))
 async def cmd_stats(message: Message) -> None:
-    """Воронка по UTM-источникам для админа."""
+    """Партнёрская воронка для админа: клики → оплаты → комиссия."""
     if not _is_admin(message.from_user.id):
         return
 
-    stats = await get_source_stats(message.from_user.id)
+    funnel = await get_source_stats(message.from_user.id)
+    revenue = await get_revenue_stats(message.from_user.id)
 
-    if not stats:
+    if not funnel:
         await message.answer(
-            "📊 <b>Статистика рефералов</b>\n\n"
+            "📊 <b>Партнёрская статистика</b>\n\n"
             "Пока никого не приглашено.\n\n"
-            "Создай UTM-ссылку через /utm и начни раздавать."
+            "Создай UTM-ссылку через /utm и начни раздавать партнёрам."
         )
         return
 
-    total_invited = sum(row["invited"] for row in stats)
-    total_rewarded = sum(row["rewarded"] for row in stats)
-    total_bonus = sum(row["bonus_days"] for row in stats)
+    # Объединяем воронку + revenue по source
+    revenue_by_source = {r["source"]: r for r in revenue}
+
+    total_clicks = sum(row["invited"] for row in funnel)
+    total_revenue = sum(
+        r.get("revenue_kopecks", 0) for r in revenue_by_source.values()
+    )
+    total_payers = sum(
+        r.get("payers", 0) for r in revenue_by_source.values()
+    )
+    total_commission = sum(
+        r.get("commission_kopecks", 0) for r in revenue_by_source.values()
+    )
+
+    overall_conv = (
+        f"{(total_payers / total_clicks * 100):.1f}%"
+        if total_clicks else "—"
+    )
 
     lines = [
-        "📊 <b>Статистика рефералов</b>",
+        f"📊 <b>Партнёрская статистика</b>",
         "",
-        f"Всего приглашено: <b>{total_invited}</b>",
-        f"Активировали: <b>{total_rewarded}</b>",
-        f"Бонус-дней получено: <b>{total_bonus}</b>",
+        f"<b>Общий итог:</b>",
+        f"Кликов: <b>{total_clicks}</b>",
+        f"Оплатили: <b>{total_payers}</b> ({overall_conv})",
+        f"Доход: <b>{_format_rub(total_revenue)}</b>",
+        f"Комиссия партнёрам ({PARTNER_COMMISSION_PERCENT}%): "
+        f"<b>{_format_rub(total_commission)}</b>",
         "",
         "<b>По источникам:</b>",
     ]
 
-    for row in stats:
+    for row in funnel:
         src = row["source"]
-        invited = row["invited"]
-        rewarded = row["rewarded"]
-        bonus = row["bonus_days"]
-        conv = f"{(rewarded / invited * 100):.0f}%" if invited else "—"
+        clicks = row["invited"]
+        rev = revenue_by_source.get(src, {})
+        payers = rev.get("payers", 0)
+        payments = rev.get("payments_count", 0)
+        rev_kop = rev.get("revenue_kopecks", 0)
+        comm_kop = rev.get("commission_kopecks", 0)
 
-        lines.append(
-            f"\n<code>{src}</code>"
-            f"\n  Кликов: {invited} · Активировали: {rewarded} ({conv})"
-            f"\n  Бонус-дней: {bonus}"
-        )
+        conv = f"{(payers / clicks * 100):.1f}%" if clicks else "—"
+
+        block = [
+            f"\n<b><code>{src}</code></b>",
+            f"  Кликов: {clicks}",
+            f"  Оплатили: {payers} ({conv})",
+        ]
+        if payments > 1:
+            block.append(f"  Платежей всего: {payments}")
+        if rev_kop:
+            block.append(f"  Доход: {_format_rub(rev_kop)}")
+            block.append(f"  Комиссия партнёру: {_format_rub(comm_kop)}")
+        lines.extend(block)
 
     text = "\n".join(lines)
     if len(text) > 4000:

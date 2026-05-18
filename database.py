@@ -133,7 +133,26 @@ CREATE TABLE IF NOT EXISTS threads_post_log (
 
 CREATE INDEX IF NOT EXISTS idx_threads_post_log_user
     ON threads_post_log(user_id, posted_at);
+
+CREATE TABLE IF NOT EXISTS payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    amount_kopecks INTEGER,
+    currency TEXT DEFAULT 'RUB',
+    period_days INTEGER,
+    source TEXT,
+    event_type TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(telegram_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_payments_source ON payments(source);
+CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id);
 """
+
+# Стандартная комиссия партнёру в процентах от платежа.
+# Если хочешь другую — поменять здесь, пересчитается во всех отчётах.
+PARTNER_COMMISSION_PERCENT = 30
 
 # Бонус приглашающему за каждого реферала, активировавшего промокод
 REFERRAL_BONUS_DAYS = 30
@@ -522,6 +541,74 @@ async def get_source_stats(referrer_id: int) -> list[dict]:
         ) as cur:
             rows = await cur.fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------- PAYMENTS / PARTNER REVENUE ----------
+
+async def get_referral_source(invitee_id: int) -> Optional[str]:
+    """Возвращает UTM-источник по которому юзер пришёл (или None)."""
+    async with aiosqlite.connect(config.database_path) as db:
+        async with db.execute(
+            "SELECT source FROM referrals WHERE invitee_id = ?",
+            (invitee_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row and row[0] else None
+
+
+async def log_payment(
+    user_id: int,
+    amount_kopecks: Optional[int],
+    currency: str,
+    period_days: int,
+    event_type: str,
+) -> None:
+    """Сохраняет платёж + автоматически проставляет UTM-источник из referrals."""
+    source = await get_referral_source(user_id)
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "INSERT INTO payments "
+            "(user_id, amount_kopecks, currency, period_days, source, event_type) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, amount_kopecks, currency, period_days, source, event_type),
+        )
+        await db.commit()
+
+
+async def get_revenue_stats(referrer_id: int) -> list[dict]:
+    """Финансовая воронка по UTM-источникам.
+
+    JOIN payments с referrals чтобы посчитать только оплаты тех юзеров,
+    которых данный реферер привёл.
+
+    Возвращает список:
+    [{source, payers, payments_count, revenue_kopecks, commission_kopecks}, ...]
+    """
+    async with aiosqlite.connect(config.database_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT "
+            "  COALESCE(p.source, '(без UTM)') AS source, "
+            "  COUNT(DISTINCT p.user_id) AS payers, "
+            "  COUNT(*) AS payments_count, "
+            "  COALESCE(SUM(p.amount_kopecks), 0) AS revenue_kopecks "
+            "FROM payments p "
+            "JOIN referrals r ON r.invitee_id = p.user_id "
+            "WHERE r.referrer_id = ? "
+            "GROUP BY source "
+            "ORDER BY revenue_kopecks DESC",
+            (referrer_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["commission_kopecks"] = int(
+            (d["revenue_kopecks"] or 0) * PARTNER_COMMISSION_PERCENT / 100
+        )
+        result.append(d)
+    return result
 
 
 async def consume_referral_reward(
