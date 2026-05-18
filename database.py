@@ -155,11 +155,20 @@ async def _migrate_users_columns(db: aiosqlite.Connection) -> None:
         )
 
 
+async def _migrate_referrals_columns(db: aiosqlite.Connection) -> None:
+    """Добавляет колонку source в referrals (UTM-трекинг)."""
+    async with db.execute("PRAGMA table_info(referrals)") as cur:
+        cols = {row[1] for row in await cur.fetchall()}
+    if "source" not in cols:
+        await db.execute("ALTER TABLE referrals ADD COLUMN source TEXT")
+
+
 async def init_db() -> None:
     """Создаёт таблицы при первом запуске + миграции колонок."""
     async with aiosqlite.connect(config.database_path) as db:
         await db.executescript(SCHEMA)
         await _migrate_users_columns(db)
+        await _migrate_referrals_columns(db)
         await db.commit()
 
 
@@ -453,8 +462,10 @@ async def log_feed_analysis(telegram_id: int, posts_count: int) -> None:
 
 # ---------- REFERRALS ----------
 
-async def set_referrer_if_new(invitee_id: int, referrer_id: int) -> bool:
-    """Привязывает реферера к юзеру. Возвращает True если связь создана впервые.
+async def set_referrer_if_new(
+    invitee_id: int, referrer_id: int, source: Optional[str] = None
+) -> bool:
+    """Привязывает реферера к юзеру (опционально с UTM-источником).
 
     Защищено от:
     - self-referral (юзер по своей ссылке)
@@ -467,14 +478,12 @@ async def set_referrer_if_new(invitee_id: int, referrer_id: int) -> bool:
     async with aiosqlite.connect(config.database_path) as db:
         db.row_factory = aiosqlite.Row
 
-        # Реферер должен существовать
         async with db.execute(
             "SELECT 1 FROM users WHERE telegram_id = ?", (referrer_id,)
         ) as cur:
             if not await cur.fetchone():
                 return False
 
-        # Уже есть связь? Не перезаписываем.
         async with db.execute(
             "SELECT 1 FROM referrals WHERE invitee_id = ?", (invitee_id,)
         ) as cur:
@@ -482,11 +491,37 @@ async def set_referrer_if_new(invitee_id: int, referrer_id: int) -> bool:
                 return False
 
         await db.execute(
-            "INSERT INTO referrals (invitee_id, referrer_id) VALUES (?, ?)",
-            (invitee_id, referrer_id),
+            "INSERT INTO referrals (invitee_id, referrer_id, source) "
+            "VALUES (?, ?, ?)",
+            (invitee_id, referrer_id, source),
         )
         await db.commit()
     return True
+
+
+async def get_source_stats(referrer_id: int) -> list[dict]:
+    """Воронка по UTM-источникам для админа.
+
+    Возвращает список:
+    [{source, invited, rewarded, bonus_days}, ...]
+    Отсортировано по invited DESC.
+    """
+    async with aiosqlite.connect(config.database_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT "
+            "  COALESCE(source, '(без UTM)') AS source, "
+            "  COUNT(*) AS invited, "
+            "  SUM(CASE WHEN rewarded_at IS NOT NULL THEN 1 ELSE 0 END) AS rewarded, "
+            "  COALESCE(SUM(bonus_days), 0) AS bonus_days "
+            "FROM referrals "
+            "WHERE referrer_id = ? "
+            "GROUP BY source "
+            "ORDER BY invited DESC",
+            (referrer_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
 
 
 async def consume_referral_reward(

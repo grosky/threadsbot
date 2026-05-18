@@ -42,13 +42,25 @@ class StartStates(StatesGroup):
 
 # ---------- DEEP LINK ----------
 
-def _parse_referrer_id(payload: str | None) -> int | None:
+def _parse_referrer_payload(payload: str | None) -> tuple[int | None, str | None]:
+    """Парсит deep-link payload.
+
+    Форматы:
+    - 'ref_12345' → (12345, None)
+    - 'ref_12345_partner_anna' → (12345, 'partner_anna')
+    Возвращает (referrer_id, source).
+    """
     if not payload or not payload.startswith("ref_"):
-        return None
+        return None, None
+    rest = payload[4:]
+    # Если есть подчёркивание после ID — это source
+    parts = rest.split("_", 1)
     try:
-        return int(payload[4:])
+        ref_id = int(parts[0])
     except ValueError:
-        return None
+        return None, None
+    source = parts[1] if len(parts) > 1 and parts[1] else None
+    return ref_id, source
 
 
 # ---------- WELCOME + PAYWALL ----------
@@ -123,11 +135,14 @@ async def handle_start(
 
     await create_user(user_tg.id, user_tg.username, user_tg.first_name or "")
 
-    referrer_id = _parse_referrer_id(command.args)
+    referrer_id, source = _parse_referrer_payload(command.args)
     if referrer_id:
-        linked = await set_referrer_if_new(user_tg.id, referrer_id)
+        linked = await set_referrer_if_new(user_tg.id, referrer_id, source)
         if linked:
-            log.info("Linked referral: invitee=%s referrer=%s", user_tg.id, referrer_id)
+            log.info(
+                "Linked referral: invitee=%s referrer=%s source=%s",
+                user_tg.id, referrer_id, source,
+            )
 
     user = await get_user(user_tg.id)
     sub_active = await is_subscription_active(user_tg.id)
