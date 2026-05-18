@@ -135,6 +135,14 @@ async def handle_tribute_webhook(request: web.Request) -> web.Response:
     payload = event.get("payload") or event.get("data") or event
     log.info("Tribute event received: type=%s keys=%s", event_type, list(event.keys()))
 
+    # Полный дамп payload для отладки реальных событий (тестовый event пустой)
+    if event_type:
+        try:
+            dump = json.dumps(event, ensure_ascii=False)[:1500]
+            log.info("Tribute full payload: %s", dump)
+        except Exception:
+            pass
+
     bot: Bot = request.app["bot"]
 
     # ----- Маршрутизация событий -----
