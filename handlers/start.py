@@ -77,10 +77,6 @@ def welcome_keyboard(show_trial: bool = True) -> InlineKeyboardMarkup:
             text="💎 Оформить подписку",
             url=config.tribute_subscription_url,
         )])
-    rows.append([InlineKeyboardButton(
-        text="🎁 У меня есть промокод",
-        callback_data="welcome:promo",
-    )])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -194,9 +190,20 @@ async def start_free_trial(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "welcome:promo")
 async def start_promo_input(callback: CallbackQuery, state: FSMContext) -> None:
+    """Скрытый callback — кнопка убрана из UI, но осталась для совместимости."""
     await callback.answer()
     await callback.message.answer(
-        "🎁 <b>Активация промокода</b>\n\n"
+        "Введи код одним сообщением:",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await state.set_state(StartStates.waiting_promocode)
+
+
+@router.message(Command("code"))
+async def cmd_code(message: Message, state: FSMContext) -> None:
+    """Скрытая команда активации кода. Юзеры узнают её только от админа."""
+    await state.clear()
+    await message.answer(
         "Введи код одним сообщением:",
         reply_markup=ReplyKeyboardRemove(),
     )
@@ -207,13 +214,16 @@ async def start_promo_input(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(Command("promo"))
 async def handle_promo_command(message: Message, state: FSMContext) -> None:
-    """Только для админа: генерирует новый промокод на 30 дней."""
+    """Только для админа: генерирует новый код на 30 дней."""
     if message.from_user.id != config.admin_telegram_id:
         return
     code = await create_promocode(duration_days=30)
     await message.answer(
-        f"Новый промокод на 30 дней:\n\n<code>{code}</code>\n\n"
-        "Передай покупателю — он введёт его в боте через «🎁 У меня есть промокод»."
+        f"Новый код на 30 дней:\n\n<code>{code}</code>\n\n"
+        "<b>Инструкция для получателя:</b>\n"
+        f"«Открой @aithreadbot → отправь /code → введи код <code>{code}</code>»\n\n"
+        "<i>Юзеры не видят слово «промокод» нигде в интерфейсе — "
+        "только те кому ты дашь команду /code знают что она существует.</i>"
     )
 
 

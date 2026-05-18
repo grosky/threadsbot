@@ -83,7 +83,7 @@ async def show_connect_screen(callback: CallbackQuery) -> None:
     if not await is_subscription_active(user_id):
         await callback.answer()
         await callback.message.answer(
-            "❌ Подписка неактивна. Активируй промокод через /start."
+            "❌ Подписка неактивна. Оформи подписку через /start."
         )
         return
 

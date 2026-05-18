@@ -22,6 +22,7 @@ from aiohttp import web
 
 from config import config
 from database import (
+    consume_referral_reward,
     create_user,
     extend_subscription_days,
     log_payment,
@@ -222,6 +223,24 @@ async def _handle_subscription(bot: Bot, payload: dict) -> web.Response:
         "Tribute subscription: user=%s amount=%s %s days=%d expires=%s",
         user_id, amount, currency, days, new_expires.isoformat(),
     )
+
+    # Если юзер пришёл по реферальной ссылке — даём бонус приглашающему
+    reward = await consume_referral_reward(user_id)
+    if reward:
+        try:
+            await bot.send_message(
+                reward["referrer_id"],
+                "🎁 <b>Твой друг оформил подписку!</b>\n\n"
+                f"Тебе начислено <b>+{reward['bonus_days']} дней</b>.\n"
+                f"Действует до: <b>{reward['new_expires_at'].strftime('%d.%m.%Y')}</b>",
+            )
+        except Exception as e:
+            log.warning("Failed to notify referrer %s: %s", reward["referrer_id"], e)
+        try:
+            from achievements import REFERRAL_RELATED, check_and_award
+            await check_and_award(reward["referrer_id"], bot, codes=REFERRAL_RELATED)
+        except Exception:
+            log.exception("Referral achievement check failed")
 
     try:
         await bot.send_message(

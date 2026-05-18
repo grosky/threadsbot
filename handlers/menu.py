@@ -226,7 +226,7 @@ async def show_subscription(callback: CallbackQuery) -> None:
     else:
         text = (
             "❌ <b>Подписка неактивна</b>\n\n"
-            "Оформи подписку через Tribute или активируй промокод через /start."
+            "Оформи подписку через Tribute чтобы продолжить."
         )
 
     # Кнопка покупки/продления через Tribute

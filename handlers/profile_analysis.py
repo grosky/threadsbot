@@ -33,7 +33,7 @@ async def start_profile_analysis(callback: CallbackQuery, state: FSMContext) -> 
     if not await is_subscription_active(user_id):
         await callback.answer()
         await callback.message.answer(
-            "❌ Подписка неактивна. Активируй промокод через /start."
+            "❌ Подписка неактивна. Оформи подписку через /start."
         )
         return
 

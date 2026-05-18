@@ -308,11 +308,7 @@ async def _send_paywall_after_trial(message: Message) -> None:
             text="💎 Оформить подписку",
             url=_cfg.tribute_subscription_url,
         )])
-    rows.append([InlineKeyboardButton(
-        text="🎁 У меня есть промокод",
-        callback_data="welcome:promo",
-    )])
-    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    kb = InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
     await message.answer(
         "🎉 <b>Это была твоя бесплатная генерация</b>\n\n"
