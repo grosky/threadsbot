@@ -27,6 +27,7 @@ from database import (
     touch_streak,
 )
 from threads_api import (
+    THREADS_MAX_CHARS,
     build_auth_url,
     debug_token,
     decrypt_token,
@@ -223,6 +224,34 @@ def post_actions_keyboard(post_key: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="✏️ Доработать", callback_data=f"post:refine:{post_key}"),
         ],
     ])
+
+
+async def _send_copy_instead_of_publish(
+    callback: CallbackQuery, post_text: str
+) -> None:
+    """Для длинных постов: показываем подсказку «скопируй и опубликуй вручную»."""
+    # Превью первой строки для контекста
+    preview = post_text[:120].replace("\n", " ")
+    if len(post_text) > 120:
+        preview += "…"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🧵 Открыть Threads", url="https://www.threads.com/")],
+    ])
+    await callback.message.answer(
+        f"📋 <b>Этот пост длиннее 500 символов — нужен тред</b>\n\n"
+        f"Threads API пока не даёт мне публиковать треды для нашего бота "
+        f"(ждём одобрение Meta, обычно 3-10 дней).\n\n"
+        f"Скопируй текст ниже и опубликуй вручную через Threads — "
+        f"родная функция «Новая ветка» сама разобьёт его на цепочку.\n\n"
+        f"<i>Начало поста: «{html.escape(preview)}»</i>",
+        reply_markup=kb,
+    )
+    # Шлём сам текст отдельным сообщением чтобы можно было быстро тапнуть «копировать»
+    full_text = post_text
+    if len(full_text) > 3900:
+        full_text = full_text[:3900] + "\n\n…(обрезано до 4000 символов Telegram)"
+    await callback.message.answer(f"<code>{html.escape(full_text)}</code>")
 
 
 @router.callback_query(F.data.startswith("publish:threads:"))

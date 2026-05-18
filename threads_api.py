@@ -32,8 +32,11 @@ TOKEN_URL = "https://graph.threads.net/oauth/access_token"
 LONG_LIVED_TOKEN_URL = "https://graph.threads.net/access_token"
 GRAPH_BASE = "https://graph.threads.net/v1.0"
 
-# Scopes для публикации
-SCOPES = "threads_basic,threads_content_publish"
+# Scopes для публикации.
+# threads_manage_replies нужен для создания цепочек (reply_to_id),
+# иначе Meta блокирует второй и последующие посты тред-чейна с
+# «Application does not have permission for this action».
+SCOPES = "threads_basic,threads_content_publish,threads_manage_replies"
 
 # State token TTL (защита от устаревших OAuth-сессий)
 STATE_TTL_SECONDS = 600  # 10 минут
