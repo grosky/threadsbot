@@ -1,4 +1,11 @@
-"""FSM для онбординга профиля автора (8 вопросов)."""
+"""Онбординг профиля: 4-5 простых вопросов.
+
+Q1: о себе и нише (niche + product одновременно)
+Q2: о читателе и его болях (audience + pains)
+Q3: tone of voice (кнопки)
+Q4: куда вести трафик (product_link)
+Q5 (опционально): результаты / social proof
+"""
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -25,11 +32,8 @@ router = Router()
 class OnboardingStates(StatesGroup):
     niche = State()
     audience = State()
-    product = State()
-    product_link = State()
     tone = State()
-    facts = State()
-    pains = State()
+    product_link = State()
     social_proof = State()
 
 
@@ -44,77 +48,75 @@ TONE_LABELS = {
 def tone_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🤗 Дружелюбный", callback_data="tone:friendly")],
-            [InlineKeyboardButton(text="🎓 Экспертный", callback_data="tone:expert")],
-            [InlineKeyboardButton(text="🔥 Провокационный", callback_data="tone:provocative")],
+            [InlineKeyboardButton(text="🤗 Дружелюбно", callback_data="tone:friendly")],
+            [InlineKeyboardButton(text="🎓 Экспертно", callback_data="tone:expert")],
+            [InlineKeyboardButton(text="🔥 Провокационно", callback_data="tone:provocative")],
             [InlineKeyboardButton(text="😎 С юмором", callback_data="tone:humor")],
         ]
     )
 
 
+# ---------- ENTRY ----------
+
 async def start_onboarding(message: Message, state: FSMContext) -> None:
-    """Запускает FSM онбординга. Вызывается из start.py после активации."""
+    """Запускает онбординг. Вызывается из start.py."""
     await message.answer(
-        "<b>Вопрос 1 из 8: Ниша</b>\n\n"
-        "В какой нише ты работаешь? Например: маркетинг, психология, "
-        "криптовалюты, продуктивность, обучение языкам.\n\n"
-        "Напиши коротко:"
+        "<b>Вопрос 1 из 4</b>\n\n"
+        "Расскажи коротко чем занимаешься.\n\n"
+        "Например:\n"
+        "— продаю курс по маркетингу для предпринимателей\n"
+        "— делаю UX-дизайн для стартапов\n"
+        "— веду блог про продуктивность с СДВГ\n\n"
+        "Одним сообщением — профессия + что продаёшь (если продаёшь)."
     )
     await state.set_state(OnboardingStates.niche)
 
 
+# ---------- Q1: НИША + ПРОДУКТ ----------
+
 @router.message(OnboardingStates.niche, F.text)
 async def on_niche(message: Message, state: FSMContext) -> None:
-    await update_profile_field(
-        message.from_user.id, "niche", (message.text or "").strip()
-    )
+    text = (message.text or "").strip()
+    user_id = message.from_user.id
+
+    # Дублируем в niche + product — Gemini получит одинаковую инфу,
+    # пользователь не вводит дважды.
+    await update_profile_field(user_id, "niche", text)
+    await update_profile_field(user_id, "product", text)
+
     await message.answer(
-        "<b>Вопрос 2 из 8: Целевая аудитория</b>\n\n"
-        "Кто твоя ЦА? Опиши в 1-2 предложениях.\n\n"
-        "<i>Пример: «Предприниматели 25-40 лет с оборотом 1-10 млн ₽/мес, "
-        "которые устали платить за рекламу.»</i>"
+        "<b>Вопрос 2 из 4</b>\n\n"
+        "Для кого пишешь? Кто эти люди и что у них болит.\n\n"
+        "Например:\n"
+        "— фрилансеры 25-35, устали от нестабильности и боятся "
+        "брать дороже\n"
+        "— мамы в декрете, хотят вернуться к работе, но боятся "
+        "что отстали от рынка\n\n"
+        "Одним сообщением — кто + чего хочет / чего боится."
     )
     await state.set_state(OnboardingStates.audience)
 
 
+# ---------- Q2: АУДИТОРИЯ + БОЛИ ----------
+
 @router.message(OnboardingStates.audience, F.text)
 async def on_audience(message: Message, state: FSMContext) -> None:
-    await update_profile_field(
-        message.from_user.id, "audience", (message.text or "").strip()
-    )
+    text = (message.text or "").strip()
+    user_id = message.from_user.id
+
+    # Дублируем в audience + pains
+    await update_profile_field(user_id, "audience", text)
+    await update_profile_field(user_id, "pains", text)
+
     await message.answer(
-        "<b>Вопрос 3 из 8: Продукт / цель аккаунта</b>\n\n"
-        "Что ты продаёшь или зачем растишь аккаунт?\n\n"
-        "<i>Пример: «Продаю курс по построению автоворонок в Telegram»</i>"
-    )
-    await state.set_state(OnboardingStates.product)
-
-
-@router.message(OnboardingStates.product, F.text)
-async def on_product(message: Message, state: FSMContext) -> None:
-    await update_profile_field(
-        message.from_user.id, "product", (message.text or "").strip()
-    )
-    await message.answer(
-        "<b>Вопрос 4 из 8: Ссылка на продукт</b>\n\n"
-        "Куда будут вести посты? Telegram-канал, бот, лендинг — любая ссылка.\n\n"
-        "<i>Пример: <code>t.me/your_bot</code></i>"
-    )
-    await state.set_state(OnboardingStates.product_link)
-
-
-@router.message(OnboardingStates.product_link, F.text)
-async def on_product_link(message: Message, state: FSMContext) -> None:
-    await update_profile_field(
-        message.from_user.id, "product_link", (message.text or "").strip()
-    )
-    await message.answer(
-        "<b>Вопрос 5 из 8: Tone of voice</b>\n\n"
-        "Какой тон ближе твоему стилю?",
+        "<b>Вопрос 3 из 4</b>\n\n"
+        "Каким голосом писать посты?",
         reply_markup=tone_keyboard(),
     )
     await state.set_state(OnboardingStates.tone)
 
+
+# ---------- Q3: TONE ----------
 
 @router.callback_query(OnboardingStates.tone, F.data.startswith("tone:"))
 async def on_tone(callback: CallbackQuery, state: FSMContext) -> None:
@@ -124,49 +126,36 @@ async def on_tone(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(
         f"Выбран: <b>{tone_value}</b>\n\n"
-        "<b>Вопрос 6 из 8: Личные факты для сторителлинга</b> <i>(можно /skip)</i>\n\n"
-        "Напиши 3-5 фактов о себе — сильно улучшит качество историй.\n\n"
-        "<i>Пример: «Бывший SMM-щик, провалил 3 запуска прежде чем нашёл схему. "
-        "СДВГ, обожаю автоматизировать всё подряд.»</i>"
+        "<b>Вопрос 4 из 4</b>\n\n"
+        "Куда отправлять читателей в конце поста?\n"
+        "Telegram, сайт, бот, страница в Threads — любая ссылка.\n\n"
+        "Если ещё нет — пиши «нет»."
     )
-    await state.set_state(OnboardingStates.facts)
+    await state.set_state(OnboardingStates.product_link)
 
 
-@router.message(OnboardingStates.facts, Command("skip"))
-async def on_facts_skip(message: Message, state: FSMContext) -> None:
-    await _ask_pains(message, state)
+# ---------- Q4: PRODUCT LINK ----------
 
+@router.message(OnboardingStates.product_link, F.text)
+async def on_product_link(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if text.lower() in ("нет", "no", "—", "-"):
+        text = ""
+    await update_profile_field(message.from_user.id, "product_link", text)
 
-@router.message(OnboardingStates.facts, F.text)
-async def on_facts(message: Message, state: FSMContext) -> None:
-    await update_profile_field(
-        message.from_user.id, "facts", (message.text or "").strip()
-    )
-    await _ask_pains(message, state)
-
-
-async def _ask_pains(message: Message, state: FSMContext) -> None:
     await message.answer(
-        "<b>Вопрос 7 из 8: Главные боли ЦА</b>\n\n"
-        "Что больше всего болит у твоей аудитории? Перечисли 3-5 болей.\n\n"
-        "<i>Пример: «Лиды дорогие. Рекламные кабинеты блокируют. Нет системы. "
-        "Воронки протекают на каждом шаге.»</i>"
-    )
-    await state.set_state(OnboardingStates.pains)
-
-
-@router.message(OnboardingStates.pains, F.text)
-async def on_pains(message: Message, state: FSMContext) -> None:
-    await update_profile_field(
-        message.from_user.id, "pains", (message.text or "").strip()
-    )
-    await message.answer(
-        "<b>Вопрос 8 из 8: Social proof</b> <i>(можно /skip)</i>\n\n"
-        "Цифры или результаты для нативной продажи?\n\n"
-        "<i>Пример: «Помог 47 клиентам выйти на 500к+ ₽/мес чистой прибыли»</i>"
+        "<b>Бонус-вопрос</b> <i>(можно /skip)</i>\n\n"
+        "Конкретные результаты или цифры для убедительности постов?\n\n"
+        "Например:\n"
+        "— помог 47 клиентам выйти на 500к+ ₽/мес\n"
+        "— 12 лет в индустрии\n"
+        "— набрал 12к подписчиков в Threads за 2 недели\n\n"
+        "Делает посты в разы убедительнее. Если нет — жми /skip."
     )
     await state.set_state(OnboardingStates.social_proof)
 
+
+# ---------- Q5 (OPTIONAL): SOCIAL PROOF ----------
 
 @router.message(OnboardingStates.social_proof, Command("skip"))
 async def on_social_proof_skip(message: Message, state: FSMContext) -> None:
@@ -175,30 +164,40 @@ async def on_social_proof_skip(message: Message, state: FSMContext) -> None:
 
 @router.message(OnboardingStates.social_proof, F.text)
 async def on_social_proof(message: Message, state: FSMContext) -> None:
-    await update_profile_field(
-        message.from_user.id, "social_proof", (message.text or "").strip()
-    )
+    text = (message.text or "").strip()
+    await update_profile_field(message.from_user.id, "social_proof", text)
+    # facts оставляем пустым — мы его слили в social_proof по умолчанию,
+    # Gemini обработает корректно даже без personal facts
     await _complete_onboarding(message, state)
 
+
+# ---------- COMPLETION ----------
 
 async def _complete_onboarding(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id
     await mark_onboarding_complete(user_id)
     await state.clear()
 
-    # Если нет подписки но есть бесплатный trial — приглашаем сразу сгенерить
     sub_active = await is_subscription_active(user_id)
     trial_available = await can_use_free_trial(user_id)
 
     if not sub_active and trial_available:
         await message.answer(
-            "🎉 <b>Профиль настроен!</b>\n\n"
-            "🎁 Твоя <b>бесплатная генерация</b> готова. "
-            "Открой меню и жми «🎯 Сгенерить» — увидишь как это работает."
+            "<b>Профиль настроен.</b>\n\n"
+            "Что доступно бесплатно (одна попытка):\n"
+            "— Сгенерить пост в одном из 5 форматов\n"
+            "— Голосовой сторителлинг — наговариваешь, "
+            "бот собирает живой пост\n\n"
+            "Что откроется после подписки:\n"
+            "— 4 генерации в день\n"
+            "— Авто-публикация в Threads\n"
+            "— Анализ профиля и чужих лент\n"
+            "— Доработка постов (жёстче / мягче / по фидбеку)\n\n"
+            "Жми «Меню» → «Создание» чтобы начать."
         )
     else:
         await message.answer(
-            "🎉 <b>Профиль настроен!</b>\n\n"
-            "Теперь можно генерить посты:"
+            "<b>Профиль настроен.</b>\n\n"
+            "Открой меню и начнём:"
         )
     await show_main_menu(message)
