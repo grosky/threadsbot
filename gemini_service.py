@@ -70,7 +70,11 @@ _TRANSFORM_CONFIG = types.GenerateContentConfig(
     response_schema=TRANSFORM_SCHEMA,
 )
 
-_MODEL_NAME = "gemini-2.5-flash"
+# Gemini 3 Flash Preview (released Dec 2025) — заметно лучше 2.5 Flash,
+# по качеству близок к 2.5 Pro, при этом в 2.5 раза дешевле Pro.
+# Если в будущем модель переименуется в стабильный релиз (без "-preview"),
+# поменять здесь.
+_MODEL_NAME = "gemini-3-flash-preview"
 
 
 async def generate_posts(
