@@ -279,7 +279,7 @@ async def publish_to_threads(callback: CallbackQuery, state: FSMContext) -> None
 
     await callback.answer("Публикую...")
     status_msg = await callback.message.answer(
-        "Публикую в Threads... (длинный пост разобью на серию отдельных постов)"
+        "Публикую в Threads... (длинный пост разобью на тред, ~10 сек на каждый пост)"
     )
 
     try:
@@ -321,11 +321,11 @@ async def publish_to_threads(callback: CallbackQuery, state: FSMContext) -> None
     if posts_count == 1:
         suffix = "одним постом"
     else:
-        suffix = f"серией из <b>{posts_count}</b> постов"
+        suffix = f"тредом из <b>{posts_count}</b> постов"
 
     await status_msg.edit_text(
         f"✅ <b>Опубликовано в Threads</b> {suffix}\n\n"
-        f"<a href='{html.escape(permalink)}'>Открыть первый пост ↗</a>"
+        f"<a href='{html.escape(permalink)}'>Открыть в Threads ↗</a>"
     )
 
 

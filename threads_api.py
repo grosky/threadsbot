@@ -329,18 +329,25 @@ async def _create_and_publish(
 
     reply_to_id=None — новый отдельный пост.
     reply_to_id=<post_id> — реплай (для цепочки тредов).
+
+    Для реплая передаём параметры как multipart/form-data (per Threads API docs).
     """
-    create_params = {
+    fields = {
         "media_type": "TEXT",
         "text": text,
         "access_token": access_token,
     }
     if reply_to_id:
-        create_params["reply_to_id"] = reply_to_id
+        fields["reply_to_id"] = reply_to_id
+
+    # FormData = multipart/form-data, как требует Threads API для реплаев
+    form = aiohttp.FormData()
+    for k, v in fields.items():
+        form.add_field(k, v)
 
     async with session.post(
         f"{GRAPH_BASE}/{threads_user_id}/threads",
-        params=create_params,
+        data=form,
     ) as resp:
         body = await resp.text()
         if resp.status != 200:
@@ -348,12 +355,17 @@ async def _create_and_publish(
         container = json.loads(body)
         container_id = container["id"]
 
+    # Threads рекомендует ждать ~30с между create и publish для надёжной обработки.
+    # Но для текста часто хватает 3-5 секунд. Берём баланс.
+    await asyncio.sleep(5)
+
+    publish_form = aiohttp.FormData()
+    publish_form.add_field("creation_id", container_id)
+    publish_form.add_field("access_token", access_token)
+
     async with session.post(
         f"{GRAPH_BASE}/{threads_user_id}/threads_publish",
-        params={
-            "creation_id": container_id,
-            "access_token": access_token,
-        },
+        data=publish_form,
     ) as resp:
         body = await resp.text()
         if resp.status != 200:
@@ -384,11 +396,7 @@ async def publish_text_post(
     """Публикует текст в Threads.
 
     Если текст укладывается в 500 символов — одиночный пост.
-    Если длиннее — серия отдельных постов (НЕ reply-цепочка).
-
-    Почему не reply_to_id: Meta в Dev Mode блокирует создание replies
-    к собственным постам (требует App Review). Пока используем standalone-посты.
-    Куски сами пронумерованы в тексте (1/N, 2/N) — серия читается понятно.
+    Если длиннее — родная цепочка тредов через reply_to_id.
 
     Возвращает {permalink, posts_count}.
     """
@@ -408,6 +416,7 @@ async def publish_text_post(
 
     async with aiohttp.ClientSession() as session:
         first_post_id: Optional[str] = None
+        prev_post_id: Optional[str] = None
 
         for i, chunk in enumerate(chunks):
             try:
@@ -416,7 +425,7 @@ async def publish_text_post(
                     threads_user_id=threads_user_id,
                     access_token=access_token,
                     text=chunk,
-                    reply_to_id=None,  # standalone-посты, без цепочки
+                    reply_to_id=prev_post_id,  # цепочка реплаев = thread
                 )
             except Exception as e:
                 preview = chunk[:120].replace("\n", " ")
@@ -427,11 +436,13 @@ async def publish_text_post(
 
             if i == 0:
                 first_post_id = post_id
+            prev_post_id = post_id
 
-            # Пауза между постами — чтобы Meta не считал нас спамом
-            # и чтобы посты в ленте шли в правильном порядке.
+            # Между публикацией предыдущего и созданием следующего реплая —
+            # пауза, чтобы Meta успел проиндексировать пост и принять его как
+            # parent для reply_to_id.
             if i < len(chunks) - 1:
-                await asyncio.sleep(3)
+                await asyncio.sleep(10)
 
         permalink = await _get_permalink(session, access_token, first_post_id)
 
