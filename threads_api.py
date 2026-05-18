@@ -384,7 +384,11 @@ async def publish_text_post(
     """Публикует текст в Threads.
 
     Если текст укладывается в 500 символов — одиночный пост.
-    Если длиннее — цепочка постов (тред), каждый реплай к предыдущему.
+    Если длиннее — серия отдельных постов (НЕ reply-цепочка).
+
+    Почему не reply_to_id: Meta в Dev Mode блокирует создание replies
+    к собственным постам (требует App Review). Пока используем standalone-посты.
+    Куски сами пронумерованы в тексте (1/N, 2/N) — серия читается понятно.
 
     Возвращает {permalink, posts_count}.
     """
@@ -394,7 +398,6 @@ async def publish_text_post(
         threads_user_id, len(chunks), len(text),
     )
 
-    # Подробный лог каждого chunk'а в Railway — для диагностики
     for i, chunk in enumerate(chunks):
         preview = chunk[:80].replace("\n", "\\n")
         log.info(
@@ -405,7 +408,6 @@ async def publish_text_post(
 
     async with aiohttp.ClientSession() as session:
         first_post_id: Optional[str] = None
-        prev_post_id: Optional[str] = None
 
         for i, chunk in enumerate(chunks):
             try:
@@ -414,10 +416,9 @@ async def publish_text_post(
                     threads_user_id=threads_user_id,
                     access_token=access_token,
                     text=chunk,
-                    reply_to_id=prev_post_id,
+                    reply_to_id=None,  # standalone-посты, без цепочки
                 )
             except Exception as e:
-                # Включаем номер chunk'а и его длину в ошибку
                 preview = chunk[:120].replace("\n", " ")
                 raise RuntimeError(
                     f"Chunk {i+1}/{len(chunks)} (len={len(chunk)}) failed. "
@@ -426,12 +427,11 @@ async def publish_text_post(
 
             if i == 0:
                 first_post_id = post_id
-            prev_post_id = post_id
 
-            # Между постами в цепочке — пауза, чтобы Threads успевал обработать
-            # и не получить rate limit. Для последнего поста sleep не нужен.
+            # Пауза между постами — чтобы Meta не считал нас спамом
+            # и чтобы посты в ленте шли в правильном порядке.
             if i < len(chunks) - 1:
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
 
         permalink = await _get_permalink(session, access_token, first_post_id)
 
