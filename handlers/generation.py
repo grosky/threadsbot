@@ -44,33 +44,12 @@ log = logging.getLogger(__name__)
 
 
 class GenerateStates(StatesGroup):
-    choosing_format = State()
     choosing_length = State()
     entering_topic = State()
     waiting_refine_feedback = State()
 
 
 # ---------- KEYBOARDS ----------
-
-def formats_keyboard() -> InlineKeyboardMarkup:
-    """Компактная сетка форматов 2-в-ряд + кнопка подробнее."""
-    items = list(FORMAT_OPTIONS.items())
-    rows = []
-    for i in range(0, len(items), 2):
-        row = [
-            InlineKeyboardButton(text=items[i][1], callback_data=f"fmt:{items[i][0]}")
-        ]
-        if i + 1 < len(items):
-            row.append(InlineKeyboardButton(
-                text=items[i + 1][1], callback_data=f"fmt:{items[i + 1][0]}"
-            ))
-        rows.append(row)
-    rows.append([InlineKeyboardButton(
-        text="❓ Какой выбрать?", callback_data="fmt:help"
-    )])
-    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="fmt:cancel")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
 
 def length_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -135,65 +114,12 @@ async def start_generation(callback: CallbackQuery, state: FSMContext) -> None:
         if reason == "free_trial" else ""
     )
     await callback.message.answer(
-        "🎯 <b>Выбери формат поста</b>\n\n"
-        "Каждый формат бьёт по своему — нажми «❓ Какой выбрать?» если не уверен."
+        "🎯 <b>Создание поста</b>\n\n"
+        "Сначала — выбери длину:\n"
+        "— <b>Короткий</b> — 1 пост, ≤ 450 символов, режется в ленте\n"
+        "— <b>Развёрнутый тред</b> — длинный пост со структурой\n\n"
+        "Бот сам подберёт <b>3 разных формата</b> и сделает по ним 3 варианта."
         + trial_note,
-        reply_markup=formats_keyboard(),
-    )
-    await state.set_state(GenerateStates.choosing_format)
-
-
-@router.callback_query(GenerateStates.choosing_format, F.data == "fmt:help")
-async def show_formats_help(callback: CallbackQuery) -> None:
-    """Карточки всех форматов с описанием, когда юзать, примером хука."""
-    lines = ["<b>Форматы постов</b>", ""]
-    for key, info in FORMAT_DETAILS.items():
-        lines.extend([
-            f"{info['emoji']} <b>{info['name']}</b>",
-            info['tagline'] + ".",
-            f"Когда: {info['when'].lower()}.",
-            f"Пример: «{info['hook_example']}»",
-            "",
-        ])
-    lines.append("Выбери формат ниже.")
-
-    await callback.answer()
-    text = "\n".join(lines)
-    if len(text) > 4000:
-        text = text[:4000] + "\n…(обрезано)"
-    await callback.message.answer(text, reply_markup=formats_keyboard())
-
-
-@router.callback_query(GenerateStates.choosing_format, F.data.startswith("fmt:"))
-async def format_selected(callback: CallbackQuery, state: FSMContext) -> None:
-    fmt = callback.data.split(":", 1)[1]
-
-    if fmt == "cancel":
-        await state.clear()
-        await callback.answer("Отменено")
-        await callback.message.edit_reply_markup(reply_markup=None)
-        return
-
-    if fmt == "help":
-        return  # уже обработано выше
-
-    if fmt not in FORMAT_OPTIONS:
-        await callback.answer("Неизвестный формат", show_alert=True)
-        return
-
-    await state.update_data(format=fmt)
-    await callback.answer()
-    await callback.message.edit_reply_markup(reply_markup=None)
-
-    info = FORMAT_DETAILS.get(fmt, {})
-    name = info.get("name", FORMAT_OPTIONS[fmt])
-    emoji = info.get("emoji", "🎯")
-
-    await callback.message.answer(
-        f"{emoji} <b>Формат:</b> {name}\n\n"
-        "Выбери длину:\n"
-        "— <b>Короткий</b> — 1 пост, до 450 символов, режется в ленте\n"
-        "— <b>Развёрнутый тред</b> — длинный пост со структурой",
         reply_markup=length_keyboard(),
     )
     await state.set_state(GenerateStates.choosing_length)
@@ -219,7 +145,8 @@ async def length_selected(callback: CallbackQuery, state: FSMContext) -> None:
     label = "Короткий пост" if choice == "short" else "Развёрнутый тред"
     await callback.message.answer(
         f"📏 <b>{label}</b>\n\n"
-        "Напиши тему поста — или жми «🎲 Удиви меня», бот сам подберёт угол под твою нишу.",
+        "Напиши тему поста — или жми «🎲 Удиви меня», "
+        "бот сам подберёт острую тему под твою нишу.",
         reply_markup=topic_keyboard(),
     )
     await state.set_state(GenerateStates.entering_topic)
@@ -232,7 +159,7 @@ async def topic_surprise(callback: CallbackQuery, state: FSMContext, bot: Bot) -
     data = await state.get_data()
     await _do_generate(
         callback.message, callback.from_user.id,
-        data["format"], None, data.get("length", "long"), state, bot,
+        None, data.get("length", "long"), state, bot,
     )
 
 
@@ -249,7 +176,7 @@ async def topic_entered(message: Message, state: FSMContext, bot: Bot) -> None:
     topic = (message.text or "").strip()
     await _do_generate(
         message, message.from_user.id,
-        data["format"], topic, data.get("length", "long"), state, bot,
+        topic, data.get("length", "long"), state, bot,
     )
 
 
@@ -258,7 +185,6 @@ async def topic_entered(message: Message, state: FSMContext, bot: Bot) -> None:
 async def _do_generate(
     message: Message,
     user_id: int,
-    format_name: str,
     topic: str | None,
     length: str,
     state: FSMContext,
@@ -288,7 +214,7 @@ async def _do_generate(
     status_msg = await message.answer("🧠 Думаю... ~10-15 секунд")
 
     try:
-        variants = await generate_posts(profile, format_name, topic, length=length)
+        variants = await generate_posts(profile, topic, length=length)
     except Exception as e:
         log.exception("Generation failed for user %s", user_id)
         await status_msg.edit_text(
@@ -298,19 +224,22 @@ async def _do_generate(
         await state.clear()
         return
 
-    await log_generation(user_id, format_name, topic)
+    await log_generation(user_id, f"auto_{length}", topic)
     await status_msg.delete()
 
     batch = int(_time.time())
-    fmt_info = FORMAT_DETAILS.get(format_name, {})
-    fmt_emoji = fmt_info.get("emoji", "🎯")
-    fmt_name = fmt_info.get("name", FORMAT_OPTIONS.get(format_name, format_name))
 
     for v in variants:
         raw_post = str(v.get("post", ""))
         safe_post = html.escape(raw_post)
         variant_id = v.get("id", "?")
         technique = html.escape(str(v.get("angle_technique", "—")))
+
+        # Формат теперь приходит из ответа Gemini, не задаётся юзером
+        format_key = (v.get("format") or "").strip().lower()
+        fmt_info = FORMAT_DETAILS.get(format_key, {})
+        fmt_emoji = fmt_info.get("emoji", "🎯")
+        fmt_name = fmt_info.get("name", FORMAT_OPTIONS.get(format_key, format_key) or "—")
 
         header = (
             f"{fmt_emoji} <b>Вариант {variant_id}</b> · {fmt_name}\n"

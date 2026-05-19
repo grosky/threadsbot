@@ -14,7 +14,6 @@ from config import config
 from prompts import (
     FEED_ANALYSIS_PROMPT,
     FEED_ANALYSIS_SCHEMA,
-    FORMAT_OPTIONS,
     PROFILE_ANALYSIS_PROMPT,
     PROFILE_ANALYSIS_SCHEMA,
     RESPONSE_SCHEMA,
@@ -79,23 +78,21 @@ _MODEL_NAME = "gemini-3-flash-preview"
 
 async def generate_posts(
     profile: dict,
-    format_name: str,
     topic: str | None = None,
     length: str = "long",
 ) -> list[dict]:
-    """Возвращает список из 3 вариантов поста.
+    """Возвращает список из 3 вариантов поста в РАЗНЫХ форматах.
+
+    Gemini сам выбирает 3 формата (манифест / разбор / контринтуитивный /
+    история / метод_известного) — юзер не указывает.
 
     length="short" — каждый вариант ≤ 450 символов (один пост в Threads).
     length="long" — полноценный развёрнутый пост (1500-2500 символов).
     """
-    if format_name not in FORMAT_OPTIONS:
-        raise ValueError(f"Неизвестный формат: {format_name}")
-
-    user_msg = build_user_message(profile, format_name, topic, length=length)
+    user_msg = build_user_message(profile, topic, length=length)
     log.info(
-        "Generating posts: user_id=%s format=%s length=%s topic=%s",
+        "Generating posts: user_id=%s length=%s topic=%s",
         profile.get("telegram_id"),
-        format_name,
         length,
         topic or "—",
     )
