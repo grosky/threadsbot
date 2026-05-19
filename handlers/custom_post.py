@@ -15,6 +15,7 @@ from aiogram.types import (
     Message,
 )
 
+from config import config
 from database import (
     get_threads_account,
     is_subscription_active,
@@ -34,6 +35,10 @@ class CustomPostStates(StatesGroup):
 @router.callback_query(F.data == "action:custom_post")
 async def start_custom_post(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
+
+    if not config.threads_publish_enabled:
+        await callback.answer("Эта фича скоро будет доступна", show_alert=True)
+        return
 
     if not await is_subscription_active(user_id):
         await callback.answer()

@@ -83,6 +83,18 @@ class Config:
         """Кнопка «Купить» показывается только если есть URL продукта."""
         return bool(self.tribute_subscription_url)
 
+    @property
+    def threads_publish_enabled(self) -> bool:
+        """Фича-флаг: показывать ли UI публикации в Threads.
+
+        Пока в Dev Mode (до Meta App Review) — выключен.
+        После одобрения Meta — поставить THREADS_PUBLISH_ENABLED=true в Railway,
+        UI включится без правок кода.
+        """
+        return os.getenv("THREADS_PUBLISH_ENABLED", "false").lower() in (
+            "true", "1", "yes",
+        )
+
 
 config = Config.from_env()
 

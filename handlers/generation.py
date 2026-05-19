@@ -310,14 +310,20 @@ async def _send_paywall_after_trial(message: Message) -> None:
         )])
     kb = InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
+    perks = [
+        "✅ <b>4 генерации в день</b> в 5 форматах",
+        "✅ <b>Голосовой сторителлинг</b>",
+        "✅ Анализ профиля и чужих лент",
+        "✅ Доработка постов (жёстче / мягче / по фидбеку)",
+    ]
+    if _cfg.threads_publish_enabled:
+        perks.insert(2, "✅ <b>Авто-публикация в Threads</b>")
+    perks_text = "\n".join(perks)
+
     await message.answer(
         "🎉 <b>Это была твоя бесплатная генерация</b>\n\n"
         "Понравилось? Оформи подписку и получи:\n\n"
-        "✅ <b>4 генерации в день</b> в 5 форматах\n"
-        "✅ <b>Голосовой сторителлинг</b>\n"
-        "✅ <b>Авто-публикация в Threads</b>\n"
-        "✅ Анализ профиля и чужих лент\n"
-        "✅ Доработка постов (жёстче / мягче / по фидбеку)\n\n"
+        f"{perks_text}\n\n"
         "Можно отменить в любой момент.",
         reply_markup=kb,
     )

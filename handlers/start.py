@@ -80,38 +80,63 @@ def welcome_keyboard(show_trial: bool = True) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-WELCOME_TEXT = (
-    "🧵 <b>Lazy Threads</b>\n\n"
-    "AI-помощник для авторов Threads.\n\n"
-    "<b>Умею:</b>\n"
-    "— Писать посты в 5 проверенных форматах\n"
-    "— Превращать голосовое в живой сторителлинг\n"
-    "— Анализ профиля и конкурентов\n"
-    "— Упаковка профиля и советы по продвижению\n"
-    "— Публиковать в Threads автоматом\n\n"
-    "🎁 <b>Первая генерация бесплатно.</b> Жми кнопку ниже."
-)
+def _build_welcome_text() -> str:
+    """Динамическая сборка — последняя строка появляется только когда
+    публикация в Threads разрешена (после Meta App Review).
+    """
+    lines = [
+        "🧵 <b>Lazy Threads</b>",
+        "",
+        "AI-помощник для авторов Threads.",
+        "",
+        "<b>Умею:</b>",
+        "— Писать посты в 5 проверенных форматах",
+        "— Превращать голосовое в живой сторителлинг",
+        "— Анализ профиля и конкурентов",
+        "— Упаковка профиля и советы по продвижению",
+    ]
+    if config.threads_publish_enabled:
+        lines.append("— Публиковать в Threads автоматом")
+    lines.extend([
+        "",
+        "🎁 <b>Первая генерация бесплатно.</b> Жми кнопку ниже.",
+    ])
+    return "\n".join(lines)
 
 
+def _build_paywall_text() -> str:
+    lines = [
+        "🔓 <b>Бесплатная генерация уже использована</b>",
+        "",
+        "Чтобы продолжить, оформи подписку. Получишь:",
+        "",
+        "✅ <b>4 генерации в день</b> в 5 форматах",
+        "✅ <b>Голосовой сторителлинг</b> — наговариваешь, бот собирает пост",
+    ]
+    if config.threads_publish_enabled:
+        lines.append("✅ <b>Авто-публикация в Threads</b> в один тап")
+    lines.extend([
+        "✅ <b>Анализ профиля и чужих лент</b>",
+        "✅ Все будущие фичи бесплатно",
+        "",
+        "Можно отменить в любой момент через @tribute.",
+    ])
+    return "\n".join(lines)
+
+
+# Старая константа оставлена для совместимости / тестов
 PAYWALL_TEXT = (
-    "🔓 <b>Бесплатная генерация уже использована</b>\n\n"
-    "Чтобы продолжить, оформи подписку. Получишь:\n\n"
-    "✅ <b>4 генерации в день</b> в 5 форматах\n"
-    "✅ <b>Голосовой сторителлинг</b> — наговариваешь, бот собирает пост\n"
-    "✅ <b>Авто-публикация в Threads</b> в один тап\n"
-    "✅ <b>Анализ профиля и чужих лент</b>\n"
-    "✅ Все будущие фичи бесплатно\n\n"
-    "Можно отменить в любой момент через @tribute."
+    "🔓 Бесплатная генерация уже использована"
 )
 
 
 async def _show_welcome(message: Message, user_id: int) -> None:
     trial_ok = await can_use_free_trial(user_id)
     if trial_ok:
-        text = WELCOME_TEXT
+        text = _build_welcome_text()
         kb = welcome_keyboard(show_trial=True)
     else:
-        text = PAYWALL_TEXT
+        text = _build_paywall_text()
         kb = welcome_keyboard(show_trial=False)
     await message.answer(text, reply_markup=kb)
 

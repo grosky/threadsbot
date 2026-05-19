@@ -80,6 +80,10 @@ def _expiry_status(token_expires_at: str) -> tuple[bool, int]:
 async def show_connect_screen(callback: CallbackQuery) -> None:
     user_id = callback.from_user.id
 
+    if not config.threads_publish_enabled:
+        await callback.answer("Эта фича скоро будет доступна", show_alert=True)
+        return
+
     if not await is_subscription_active(user_id):
         await callback.answer()
         await callback.message.answer(
@@ -219,20 +223,21 @@ def publish_button(post_text_id: str) -> InlineKeyboardMarkup:
 def post_actions_keyboard(post_key: str) -> InlineKeyboardMarkup:
     """Полный набор кнопок под сгенерированным/написанным постом.
 
-    Используется и generation, и storytelling, и custom_post.
-    Хендлеры post:harder / post:softer / post:refine живут в generation.py.
+    Кнопка публикации появляется только если флаг THREADS_PUBLISH_ENABLED=true.
+    Сейчас (Dev Mode) — скрыта, юзеры получают только Жёстче/Мягче/Доработать.
     """
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
+    rows = []
+    if config.threads_publish_enabled:
+        rows.append([InlineKeyboardButton(
             text="📤 Опубликовать в Threads",
             callback_data=f"publish:threads:{post_key}",
-        )],
-        [
-            InlineKeyboardButton(text="🔥 Жёстче", callback_data=f"post:harder:{post_key}"),
-            InlineKeyboardButton(text="😌 Мягче", callback_data=f"post:softer:{post_key}"),
-            InlineKeyboardButton(text="✏️ Доработать", callback_data=f"post:refine:{post_key}"),
-        ],
+        )])
+    rows.append([
+        InlineKeyboardButton(text="🔥 Жёстче", callback_data=f"post:harder:{post_key}"),
+        InlineKeyboardButton(text="😌 Мягче", callback_data=f"post:softer:{post_key}"),
+        InlineKeyboardButton(text="✏️ Доработать", callback_data=f"post:refine:{post_key}"),
     ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _send_copy_instead_of_publish(

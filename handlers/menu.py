@@ -37,14 +37,18 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
 
 
 def create_menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🎯 Сгенерить пост", callback_data="action:generate")],
-            [InlineKeyboardButton(text="🎙 Голосовой сторителлинг", callback_data="action:storytelling")],
-            [InlineKeyboardButton(text="✍️ Опубликовать свой пост", callback_data="action:custom_post")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
-        ]
-    )
+    rows = [
+        [InlineKeyboardButton(text="🎯 Сгенерить пост", callback_data="action:generate")],
+        [InlineKeyboardButton(text="🎙 Голосовой сторителлинг", callback_data="action:storytelling")],
+    ]
+    # «Свой пост» = только для публикации в Threads. Прячем до App Review.
+    if config.threads_publish_enabled:
+        rows.append([InlineKeyboardButton(
+            text="✍️ Опубликовать свой пост",
+            callback_data="action:custom_post",
+        )])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def analytics_menu_keyboard() -> InlineKeyboardMarkup:
@@ -58,16 +62,21 @@ def analytics_menu_keyboard() -> InlineKeyboardMarkup:
 
 
 def settings_menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔗 Подключение Threads", callback_data="action:connect_threads")],
-            [InlineKeyboardButton(text="👤 Мой профиль", callback_data="action:profile")],
-            [InlineKeyboardButton(text="💎 Подписка", callback_data="action:subscription")],
-            [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="action:invite")],
-            [InlineKeyboardButton(text="🏆 Ачивки", callback_data="action:achievements")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
-        ]
-    )
+    rows = []
+    # Подключение Threads имеет смысл только если включена публикация.
+    if config.threads_publish_enabled:
+        rows.append([InlineKeyboardButton(
+            text="🔗 Подключение Threads",
+            callback_data="action:connect_threads",
+        )])
+    rows.extend([
+        [InlineKeyboardButton(text="👤 Мой профиль", callback_data="action:profile")],
+        [InlineKeyboardButton(text="💎 Подписка", callback_data="action:subscription")],
+        [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="action:invite")],
+        [InlineKeyboardButton(text="🏆 Ачивки", callback_data="action:achievements")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _build_status_header(user_id: int) -> str:
@@ -86,12 +95,16 @@ async def _build_status_header(user_id: int) -> str:
     else:
         sub_line = "💎 Подписка: ❌ неактивна"
 
-    th_account = await get_threads_account(user_id)
-    if th_account:
-        username = th_account.get("threads_username") or "—"
-        th_line = f"🔗 Threads: <b>@{username}</b>"
+    # Строка про Threads показывается только если публикация включена
+    if config.threads_publish_enabled:
+        th_account = await get_threads_account(user_id)
+        if th_account:
+            username = th_account.get("threads_username") or "—"
+            th_line = f"🔗 Threads: <b>@{username}</b>"
+        else:
+            th_line = "🔗 Threads: не подключён"
     else:
-        th_line = "🔗 Threads: не подключён"
+        th_line = None
 
     used = await count_today_generations(user_id)
     if user_id == config.admin_telegram_id:
@@ -100,7 +113,10 @@ async def _build_status_header(user_id: int) -> str:
         remaining = max(0, DAILY_LIMIT - used)
         limit_line = f"🎯 Сегодня: <b>{remaining}/{DAILY_LIMIT}</b>"
 
-    lines = [sub_line, th_line, limit_line]
+    lines = [sub_line]
+    if th_line:
+        lines.append(th_line)
+    lines.append(limit_line)
     if streak > 0:
         lines.append(f"🔥 Стрик: <b>{streak} дн.</b>")
     return "\n".join(lines)
@@ -135,12 +151,15 @@ async def go_main(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "menu:create")
 async def go_create(callback: CallbackQuery) -> None:
     await callback.answer()
-    text = (
-        "📝 <b>Создание постов</b>\n\n"
-        "🎯 <b>Сгенерить</b> — Gemini создаёт 3 варианта по выбранному формату\n"
-        "🎙 <b>Голосом</b> — наговариваешь идею, бот собирает живой сторителлинг\n"
-        "✍️ <b>Свой пост</b> — пишешь руками, бот публикует в Threads"
-    )
+    lines = [
+        "📝 <b>Создание постов</b>",
+        "",
+        "🎯 <b>Сгенерить</b> — 3 варианта поста по выбранному формату",
+        "🎙 <b>Голосом</b> — наговариваешь идею, бот собирает живой сторителлинг",
+    ]
+    if config.threads_publish_enabled:
+        lines.append("✍️ <b>Свой пост</b> — пишешь руками, бот публикует в Threads")
+    text = "\n".join(lines)
     try:
         await callback.message.edit_text(text, reply_markup=create_menu_keyboard())
     except Exception:
@@ -164,14 +183,16 @@ async def go_analytics(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "menu:settings")
 async def go_settings(callback: CallbackQuery) -> None:
     await callback.answer()
-    text = (
-        "⚙️ <b>Настройки</b>\n\n"
-        "🔗 <b>Threads</b> — подключение / отключение аккаунта для публикаций\n"
-        "👤 <b>Профиль</b> — твои ниша, ЦА, продукт\n"
-        "💎 <b>Подписка</b> — срок действия\n"
-        "🎁 <b>Пригласить</b> — твоя ref-ссылка и статистика\n"
-        "🏆 <b>Ачивки</b> — открытые и закрытые"
-    )
+    lines = ["⚙️ <b>Настройки</b>", ""]
+    if config.threads_publish_enabled:
+        lines.append("🔗 <b>Threads</b> — подключение для авто-публикации")
+    lines.extend([
+        "👤 <b>Профиль</b> — твои ниша, ЦА, продукт",
+        "💎 <b>Подписка</b> — срок действия",
+        "🎁 <b>Пригласить</b> — твоя ref-ссылка и статистика",
+        "🏆 <b>Ачивки</b> — открытые и закрытые",
+    ])
+    text = "\n".join(lines)
     try:
         await callback.message.edit_text(text, reply_markup=settings_menu_keyboard())
     except Exception:

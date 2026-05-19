@@ -182,6 +182,16 @@ async def _complete_onboarding(message: Message, state: FSMContext) -> None:
     trial_available = await can_use_free_trial(user_id)
 
     if not sub_active and trial_available:
+        from config import config as _cfg
+        sub_lines = [
+            "— 4 генерации в день",
+            "— Анализ профиля и чужих лент",
+            "— Доработка постов (жёстче / мягче / по фидбеку)",
+        ]
+        if _cfg.threads_publish_enabled:
+            sub_lines.insert(1, "— Авто-публикация в Threads")
+        sub_text = "\n".join(sub_lines)
+
         await message.answer(
             "<b>Профиль настроен.</b>\n\n"
             "Что доступно бесплатно (одна попытка):\n"
@@ -189,10 +199,7 @@ async def _complete_onboarding(message: Message, state: FSMContext) -> None:
             "— Голосовой сторителлинг — наговариваешь, "
             "бот собирает живой пост\n\n"
             "Что откроется после подписки:\n"
-            "— 4 генерации в день\n"
-            "— Авто-публикация в Threads\n"
-            "— Анализ профиля и чужих лент\n"
-            "— Доработка постов (жёстче / мягче / по фидбеку)\n\n"
+            f"{sub_text}\n\n"
             "Жми «Меню» → «Создание» чтобы начать."
         )
     else:
