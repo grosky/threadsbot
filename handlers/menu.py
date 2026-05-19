@@ -40,6 +40,7 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
 def create_menu_keyboard() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="🎯 Сгенерить пост", callback_data="action:generate")],
+        [InlineKeyboardButton(text="💡 Идеи для постов", callback_data="action:ideas")],
         [InlineKeyboardButton(text="🎙 Голосовой сторителлинг", callback_data="action:storytelling")],
     ]
     # «Свой пост» = только для публикации в Threads. Прячем до App Review.
@@ -164,8 +165,9 @@ async def go_create(callback: CallbackQuery) -> None:
     lines = [
         "📝 <b>Создание постов</b>",
         "",
-        "🎯 <b>Сгенерить</b> — 3 варианта поста по выбранному формату",
-        "🎙 <b>Голосом</b> — наговариваешь идею, бот собирает живой сторителлинг",
+        "🎯 <b>Сгенерить</b> — 3 варианта поста по теме",
+        "💡 <b>Идеи</b> — бот предложит 10 идей под твою нишу",
+        "🎙 <b>Голосом</b> — наговариваешь идею, бот собирает сторителлинг",
     ]
     if config.threads_publish_enabled:
         lines.append("✍️ <b>Свой пост</b> — пишешь руками, бот публикует в Threads")

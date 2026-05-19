@@ -126,7 +126,7 @@ async def start_generation(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(GenerateStates.choosing_length, F.data.startswith("len:"))
-async def length_selected(callback: CallbackQuery, state: FSMContext) -> None:
+async def length_selected(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     choice = callback.data.split(":", 1)[1]
     if choice == "cancel":
         await state.clear()
@@ -142,11 +142,27 @@ async def length_selected(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await callback.message.edit_reply_markup(reply_markup=None)
 
+    # Если тема уже задана заранее (юзер пришёл через брейншторм) —
+    # пропускаем шаг ввода и сразу генерим.
+    data = await state.get_data()
+    preset_topic = data.get("topic")
+    if preset_topic:
+        await state.update_data(topic=None)  # очищаем чтобы не залипало
+        await _do_generate(
+            callback.message, callback.from_user.id,
+            preset_topic, choice, state, bot,
+        )
+        return
+
     label = "Короткий пост" if choice == "short" else "Развёрнутый тред"
     await callback.message.answer(
         f"📏 <b>{label}</b>\n\n"
-        "Напиши тему поста — или жми «🎲 Удиви меня», "
-        "бот сам подберёт острую тему под твою нишу.",
+        "Напиши <b>тему</b> или <b>сырую мысль/наблюдение</b>:\n\n"
+        "<i>Тема:</i> «как набрать первую тысячу подписчиков»\n"
+        "<i>Сырая мысль:</i> «вчера в кафе подслушал как девушки обсуждали "
+        "что курсы все одинаковые»\n\n"
+        "Бот разберётся и сделает 3 разных поста.\n"
+        "Или жми «🎲 Удиви меня» — подберёт тему сам.",
         reply_markup=topic_keyboard(),
     )
     await state.set_state(GenerateStates.entering_topic)

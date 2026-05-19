@@ -14,6 +14,7 @@ from .storytelling import router as storytelling_router
 from .referral import router as referral_router
 from .threads_connect import router as threads_connect_router
 from .custom_post import router as custom_post_router
+from .brainstorm import router as brainstorm_router
 from .menu import router as menu_router
 
 
@@ -27,4 +28,5 @@ def setup_routers(dp: Dispatcher) -> None:
     dp.include_router(referral_router)
     dp.include_router(threads_connect_router)
     dp.include_router(custom_post_router)
+    dp.include_router(brainstorm_router)
     dp.include_router(menu_router)

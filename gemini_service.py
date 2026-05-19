@@ -14,6 +14,8 @@ from config import config
 from prompts import (
     FEED_ANALYSIS_PROMPT,
     FEED_ANALYSIS_SCHEMA,
+    IDEAS_PROMPT,
+    IDEAS_SCHEMA,
     PROFILE_ANALYSIS_PROMPT,
     PROFILE_ANALYSIS_SCHEMA,
     RESPONSE_SCHEMA,
@@ -23,6 +25,7 @@ from prompts import (
     TRANSFORM_PROMPT,
     TRANSFORM_SCHEMA,
     build_feed_analysis_message,
+    build_ideas_user_message,
     build_profile_analysis_message,
     build_storytelling_message,
     build_transform_message,
@@ -67,6 +70,13 @@ _TRANSFORM_CONFIG = types.GenerateContentConfig(
     temperature=0.8,
     response_mime_type="application/json",
     response_schema=TRANSFORM_SCHEMA,
+)
+
+_IDEAS_CONFIG = types.GenerateContentConfig(
+    system_instruction=IDEAS_PROMPT,
+    temperature=1.0,  # хочется разнообразия в идеях
+    response_mime_type="application/json",
+    response_schema=IDEAS_SCHEMA,
 )
 
 # Gemini 3 Flash Preview (released Dec 2025) — заметно лучше 2.5 Flash,
@@ -189,6 +199,27 @@ async def transform_post(
         config=_TRANSFORM_CONFIG,
     )
     return json.loads(response.text)
+
+
+async def generate_ideas(profile: dict) -> list[dict]:
+    """Генерирует 10 идей для постов под профиль автора.
+
+    Возвращает список dict'ов: [{id, text}, ...]
+    """
+    user_msg = build_ideas_user_message(profile)
+    log.info(
+        "Generating ideas: user_id=%s niche=%s",
+        profile.get("telegram_id"),
+        (profile.get("niche") or "—")[:60],
+    )
+
+    response = await _client.aio.models.generate_content(
+        model=_MODEL_NAME,
+        contents=user_msg,
+        config=_IDEAS_CONFIG,
+    )
+    data = json.loads(response.text)
+    return data.get("ideas", [])
 
 
 async def analyze_feed(profile: dict, posts: list[str]) -> dict:
