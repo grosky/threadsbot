@@ -221,8 +221,18 @@ RESPONSE_SCHEMA = {
 }
 
 
-def build_user_message(profile: dict, format_name: str, topic: str | None) -> str:
-    """Собирает user message из профиля и параметров запроса."""
+def build_user_message(
+    profile: dict,
+    format_name: str,
+    topic: str | None,
+    length: str = "long",
+) -> str:
+    """Собирает user message из профиля и параметров запроса.
+
+    length:
+    - "short" → каждый вариант ≤ 450 символов (умещается в один пост Threads)
+    - "long" → развёрнутый пост на 1500-2500 символов (как раньше)
+    """
     parts = [
         "ПРОФИЛЬ АВТОРА:",
         f"- Ниша: {profile.get('niche') or '—'}",
@@ -238,6 +248,25 @@ def build_user_message(profile: dict, format_name: str, topic: str | None) -> st
     ]
     if topic:
         parts.append(f"\nТЕМА: {topic}")
+
+    if length == "short":
+        parts.append(
+            "\nДЛИНА: КОРОТКИЙ ПОСТ.\n"
+            "ВАЖНО — каждый из 3 вариантов ≤ 450 символов "
+            "(должен умещаться в ОДИН пост Threads).\n"
+            "Стиль для коротких:\n"
+            "- Только хук + 2-3 убойные строки + CTA в одну строку\n"
+            "- БЕЗ нумерованных пунктов, БЕЗ заголовков, БЕЗ Вердикта-цитаты\n"
+            "- Каждое слово работает. Никакого ядра-списка.\n"
+            "- Хук занимает первые 1-2 строки, остальное — добивает мысль"
+        )
+    else:
+        parts.append(
+            "\nДЛИНА: РАЗВЁРНУТЫЙ ТРЕД (1500-2500 символов).\n"
+            "Используй полную структуру: хук → анти-тезис → нумерованное ядро → "
+            "финальный пункт с нативной продажей."
+        )
+
     parts.append("\nСоздай 3 разных варианта поста под этот профиль и формат.")
     return "\n".join(parts)
 

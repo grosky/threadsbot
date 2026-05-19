@@ -45,6 +45,7 @@ log = logging.getLogger(__name__)
 
 class GenerateStates(StatesGroup):
     choosing_format = State()
+    choosing_length = State()
     entering_topic = State()
     waiting_refine_feedback = State()
 
@@ -69,6 +70,22 @@ def formats_keyboard() -> InlineKeyboardMarkup:
     )])
     rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="fmt:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def length_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text="📝 Короткий — 1 пост",
+                callback_data="len:short",
+            )],
+            [InlineKeyboardButton(
+                text="🧵 Развёрнутый тред",
+                callback_data="len:long",
+            )],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="len:cancel")],
+        ]
+    )
 
 
 def topic_keyboard() -> InlineKeyboardMarkup:
@@ -174,7 +191,35 @@ async def format_selected(callback: CallbackQuery, state: FSMContext) -> None:
 
     await callback.message.answer(
         f"{emoji} <b>Формат:</b> {name}\n\n"
-        "Напиши тему поста — или жми «🎲 Удиви меня», Gemini сам подберёт угол под твою нишу.",
+        "Выбери длину:\n"
+        "— <b>Короткий</b> — 1 пост, до 450 символов, режется в ленте\n"
+        "— <b>Развёрнутый тред</b> — длинный пост со структурой",
+        reply_markup=length_keyboard(),
+    )
+    await state.set_state(GenerateStates.choosing_length)
+
+
+@router.callback_query(GenerateStates.choosing_length, F.data.startswith("len:"))
+async def length_selected(callback: CallbackQuery, state: FSMContext) -> None:
+    choice = callback.data.split(":", 1)[1]
+    if choice == "cancel":
+        await state.clear()
+        await callback.answer("Отменено")
+        await callback.message.edit_reply_markup(reply_markup=None)
+        return
+
+    if choice not in ("short", "long"):
+        await callback.answer("Неизвестный выбор", show_alert=True)
+        return
+
+    await state.update_data(length=choice)
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=None)
+
+    label = "Короткий пост" if choice == "short" else "Развёрнутый тред"
+    await callback.message.answer(
+        f"📏 <b>{label}</b>\n\n"
+        "Напиши тему поста — или жми «🎲 Удиви меня», бот сам подберёт угол под твою нишу.",
         reply_markup=topic_keyboard(),
     )
     await state.set_state(GenerateStates.entering_topic)
@@ -186,7 +231,8 @@ async def topic_surprise(callback: CallbackQuery, state: FSMContext, bot: Bot) -
     await callback.message.edit_reply_markup(reply_markup=None)
     data = await state.get_data()
     await _do_generate(
-        callback.message, callback.from_user.id, data["format"], None, state, bot
+        callback.message, callback.from_user.id,
+        data["format"], None, data.get("length", "long"), state, bot,
     )
 
 
@@ -201,7 +247,10 @@ async def topic_cancel(callback: CallbackQuery, state: FSMContext) -> None:
 async def topic_entered(message: Message, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
     topic = (message.text or "").strip()
-    await _do_generate(message, message.from_user.id, data["format"], topic, state, bot)
+    await _do_generate(
+        message, message.from_user.id,
+        data["format"], topic, data.get("length", "long"), state, bot,
+    )
 
 
 # ---------- ОСНОВНАЯ ГЕНЕРАЦИЯ ----------
@@ -211,6 +260,7 @@ async def _do_generate(
     user_id: int,
     format_name: str,
     topic: str | None,
+    length: str,
     state: FSMContext,
     bot: Bot,
 ) -> None:
@@ -238,7 +288,7 @@ async def _do_generate(
     status_msg = await message.answer("🧠 Думаю... ~10-15 секунд")
 
     try:
-        variants = await generate_posts(profile, format_name, topic)
+        variants = await generate_posts(profile, format_name, topic, length=length)
     except Exception as e:
         log.exception("Generation failed for user %s", user_id)
         await status_msg.edit_text(

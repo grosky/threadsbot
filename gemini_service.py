@@ -81,19 +81,22 @@ async def generate_posts(
     profile: dict,
     format_name: str,
     topic: str | None = None,
+    length: str = "long",
 ) -> list[dict]:
     """Возвращает список из 3 вариантов поста.
 
-    Каждый вариант — dict с ключами: id, hook_formula, angle_technique, post.
+    length="short" — каждый вариант ≤ 450 символов (один пост в Threads).
+    length="long" — полноценный развёрнутый пост (1500-2500 символов).
     """
     if format_name not in FORMAT_OPTIONS:
         raise ValueError(f"Неизвестный формат: {format_name}")
 
-    user_msg = build_user_message(profile, format_name, topic)
+    user_msg = build_user_message(profile, format_name, topic, length=length)
     log.info(
-        "Generating posts: user_id=%s format=%s topic=%s",
+        "Generating posts: user_id=%s format=%s length=%s topic=%s",
         profile.get("telegram_id"),
         format_name,
+        length,
         topic or "—",
     )
 
