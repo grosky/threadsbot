@@ -35,6 +35,7 @@ class OnboardingStates(StatesGroup):
     tone = State()
     product_link = State()
     social_proof = State()
+    offer_packaging = State()
 
 
 TONE_LABELS = {
@@ -173,9 +174,59 @@ async def on_social_proof(message: Message, state: FSMContext) -> None:
 
 # ---------- COMPLETION ----------
 
+def _packaging_offer_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🆕 Помоги упаковать",
+                callback_data="onboard:pack_yes",
+            )],
+            [InlineKeyboardButton(
+                text="Уже всё готово, пропустить",
+                callback_data="onboard:pack_no",
+            )],
+        ]
+    )
+
+
 async def _complete_onboarding(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id
     await mark_onboarding_complete(user_id)
+
+    # Спрашиваем — упаковать ли профиль с нуля
+    await message.answer(
+        "<b>Профиль настроен.</b>\n\n"
+        "Сначала скажи — у тебя <b>уже есть профиль в Threads</b> с именем, "
+        "bio, аватаркой и закрепом? Или ты с нуля?\n\n"
+        "Если с нуля — соберу за тебя имя, bio, ссылку и закреп под твою нишу.",
+        reply_markup=_packaging_offer_keyboard(),
+    )
+    await state.set_state(OnboardingStates.offer_packaging)
+
+
+@router.callback_query(OnboardingStates.offer_packaging, F.data == "onboard:pack_yes")
+async def on_pack_yes(callback: CallbackQuery, state: FSMContext) -> None:
+    from .profile_packaging import start_packaging_from_onboarding
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await start_packaging_from_onboarding(callback.message, state)
+
+
+@router.callback_query(OnboardingStates.offer_packaging, F.data == "onboard:pack_no")
+async def on_pack_no(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await _finalize_onboarding_without_packaging(callback.message, state)
+
+
+async def _finalize_onboarding_without_packaging(message: Message, state: FSMContext) -> None:
+    user_id = message.from_user.id
     await state.clear()
 
     sub_active = await is_subscription_active(user_id)
@@ -193,7 +244,7 @@ async def _complete_onboarding(message: Message, state: FSMContext) -> None:
         sub_text = "\n".join(sub_lines)
 
         await message.answer(
-            "<b>Профиль настроен.</b>\n\n"
+            "Окей.\n\n"
             "Что доступно бесплатно (одна попытка):\n"
             "— Сгенерить пост в одном из 5 форматов\n"
             "— Голосовой сторителлинг — наговариваешь, "
@@ -203,8 +254,5 @@ async def _complete_onboarding(message: Message, state: FSMContext) -> None:
             "Жми «Меню» → «Создание» чтобы начать."
         )
     else:
-        await message.answer(
-            "<b>Профиль настроен.</b>\n\n"
-            "Открой меню и начнём:"
-        )
+        await message.answer("Открой меню и начнём:")
     await show_main_menu(message)

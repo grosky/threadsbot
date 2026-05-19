@@ -172,6 +172,10 @@ async def _migrate_users_columns(db: aiosqlite.Connection) -> None:
         await db.execute(
             "ALTER TABLE users ADD COLUMN free_trial_used INTEGER DEFAULT 0"
         )
+    if "profile_pack_json" not in cols:
+        await db.execute(
+            "ALTER TABLE users ADD COLUMN profile_pack_json TEXT"
+        )
 
 
 async def _migrate_referrals_columns(db: aiosqlite.Connection) -> None:
@@ -234,6 +238,44 @@ async def mark_onboarding_complete(telegram_id: int) -> None:
             (telegram_id,),
         )
         await db.commit()
+
+
+async def save_profile_pack(telegram_id: int, pack: dict) -> None:
+    """Сохраняет упаковку профиля (имя/bio/ссылка/закрепы) в JSON-поле."""
+    import json as _json
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "UPDATE users SET profile_pack_json = ? WHERE telegram_id = ?",
+            (_json.dumps(pack, ensure_ascii=False), telegram_id),
+        )
+        await db.commit()
+
+
+async def get_profile_pack(telegram_id: int) -> Optional[dict]:
+    """Возвращает сохранённую упаковку профиля или None."""
+    import json as _json
+    user = await get_user(telegram_id)
+    if not user or not user.get("profile_pack_json"):
+        return None
+    try:
+        return _json.loads(user["profile_pack_json"])
+    except (ValueError, TypeError):
+        return None
+
+
+async def update_profile_pack_block(
+    telegram_id: int, block_key: str, value
+) -> None:
+    """Обновляет один блок упаковки (names | bios | link_recommendation | pinned_posts).
+
+    Если pack ещё не сохранён — создаёт минимальный.
+    """
+    allowed = {"names", "bios", "link_recommendation", "pinned_posts"}
+    if block_key not in allowed:
+        raise ValueError(f"Forbidden pack block: {block_key}")
+    current = await get_profile_pack(telegram_id) or {}
+    current[block_key] = value
+    await save_profile_pack(telegram_id, current)
 
 
 async def is_subscription_active(telegram_id: int) -> bool:

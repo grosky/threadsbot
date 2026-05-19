@@ -19,6 +19,12 @@ from prompts import (
     IDEAS_SCHEMA,
     PROFILE_ANALYSIS_PROMPT,
     PROFILE_ANALYSIS_SCHEMA,
+    PROFILE_PACKAGING_BIOS_SCHEMA,
+    PROFILE_PACKAGING_FULL_SCHEMA,
+    PROFILE_PACKAGING_LINK_SCHEMA,
+    PROFILE_PACKAGING_NAMES_SCHEMA,
+    PROFILE_PACKAGING_PINNED_SCHEMA,
+    PROFILE_PACKAGING_PROMPT,
     RESPONSE_SCHEMA,
     STORYTELLING_PROMPT,
     STORYTELLING_SCHEMA,
@@ -28,6 +34,7 @@ from prompts import (
     build_feed_analysis_message,
     build_ideas_user_message,
     build_profile_analysis_message,
+    build_profile_packaging_message,
     build_storytelling_message,
     build_transform_message,
     build_user_message,
@@ -79,6 +86,23 @@ _IDEAS_CONFIG = types.GenerateContentConfig(
     response_mime_type="application/json",
     response_schema=IDEAS_SCHEMA,
 )
+
+
+def _packaging_config(target: str) -> "types.GenerateContentConfig":
+    """Конфиг для упаковки профиля — схема меняется в зависимости от блока."""
+    schema_map = {
+        "all": PROFILE_PACKAGING_FULL_SCHEMA,
+        "names": PROFILE_PACKAGING_NAMES_SCHEMA,
+        "bios": PROFILE_PACKAGING_BIOS_SCHEMA,
+        "link": PROFILE_PACKAGING_LINK_SCHEMA,
+        "pinned": PROFILE_PACKAGING_PINNED_SCHEMA,
+    }
+    return types.GenerateContentConfig(
+        system_instruction=PROFILE_PACKAGING_PROMPT,
+        temperature=0.9,
+        response_mime_type="application/json",
+        response_schema=schema_map.get(target, PROFILE_PACKAGING_FULL_SCHEMA),
+    )
 
 # Gemini 3 Flash Preview (released Dec 2025) — заметно лучше 2.5 Flash,
 # по качеству близок к 2.5 Pro, при этом в 2.5 раза дешевле Pro.
@@ -250,6 +274,52 @@ async def generate_ideas(profile: dict) -> list[dict]:
     response = await _call_with_fallback(user_msg, _IDEAS_CONFIG)
     data = json.loads(response.text)
     return data.get("ideas", [])
+
+
+async def generate_profile_pack(
+    profile: dict,
+    socials_text: str,
+    perception_text: str,
+) -> dict:
+    """Генерирует полную упаковку профиля Threads: имя + bio + ссылка + закрепы.
+
+    Возвращает dict: {names, bios, link_recommendation, pinned_posts}.
+    """
+    user_msg = build_profile_packaging_message(
+        profile, socials_text, perception_text, target="all",
+    )
+    log.info(
+        "Generating profile pack: user_id=%s niche=%s",
+        profile.get("telegram_id"),
+        (profile.get("niche") or "—")[:60],
+    )
+    response = await _call_with_fallback(user_msg, _packaging_config("all"))
+    return json.loads(response.text)
+
+
+async def regenerate_pack_block(
+    profile: dict,
+    socials_text: str,
+    perception_text: str,
+    target: str,
+) -> dict:
+    """Перегенерирует один блок упаковки: names | bios | link | pinned.
+
+    Возвращает dict с одним полем соответствующим target.
+    """
+    if target not in ("names", "bios", "link", "pinned"):
+        raise ValueError(f"Unknown packaging target: {target}")
+
+    user_msg = build_profile_packaging_message(
+        profile, socials_text, perception_text, target=target,
+    )
+    log.info(
+        "Regenerating pack block: user_id=%s target=%s",
+        profile.get("telegram_id"),
+        target,
+    )
+    response = await _call_with_fallback(user_msg, _packaging_config(target))
+    return json.loads(response.text)
 
 
 async def analyze_feed(profile: dict, posts: list[str]) -> dict:
