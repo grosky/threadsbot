@@ -12,6 +12,7 @@ from config import config
 from database import (
     PARTNER_COMMISSION_PERCENT,
     REFERRAL_BONUS_DAYS,
+    get_payments_detailed,
     get_referral_stats,
     get_revenue_stats,
     get_source_stats,
@@ -118,6 +119,31 @@ def _format_rub(kopecks: int) -> str:
     return f"{rub:.2f}".replace(".", ",") + " ₽"
 
 
+def _format_user(p: dict) -> str:
+    """Формирует строку '@username' или 'Имя (ID)' или просто 'ID' для платежа."""
+    username = p.get("username")
+    first_name = p.get("first_name")
+    user_id = p.get("user_id")
+
+    if username:
+        return f"@{username}"
+    if first_name:
+        return f"{first_name} (<code>{user_id}</code>)"
+    return f"<code>{user_id}</code>"
+
+
+def _format_date(iso_str: str) -> str:
+    """'2026-05-19T14:07:..' → '19.05'."""
+    if not iso_str:
+        return "—"
+    from datetime import datetime
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        return dt.strftime("%d.%m")
+    except (ValueError, TypeError):
+        return "—"
+
+
 @router.message(Command("stats"))
 async def cmd_stats(message: Message) -> None:
     """Партнёрская воронка для админа: клики → оплаты → комиссия."""
@@ -132,6 +158,12 @@ async def cmd_stats(message: Message) -> None:
 
     funnel = await get_source_stats(message.from_user.id)
     revenue = await get_revenue_stats(message.from_user.id)
+    payments_detailed = await get_payments_detailed(message.from_user.id)
+
+    # Группируем платежи по source
+    payments_by_source: dict[str, list[dict]] = {}
+    for p in payments_detailed:
+        payments_by_source.setdefault(p["source"], []).append(p)
 
     if not funnel:
         await message.answer(
@@ -194,6 +226,19 @@ async def cmd_stats(message: Message) -> None:
         if rev_kop:
             block.append(f"  Доход: {_format_rub(rev_kop)}")
             block.append(f"  Комиссия партнёру: {_format_rub(comm_kop)}")
+
+        # Список конкретных платежей по этому источнику (макс 10)
+        payments_for_source = payments_by_source.get(src, [])
+        if payments_for_source:
+            block.append("  <i>Платежи:</i>")
+            for p in payments_for_source[:10]:
+                user_label = _format_user(p)
+                amount = _format_rub(p.get("amount_kopecks", 0))
+                date = _format_date(p.get("created_at", ""))
+                block.append(f"  • {user_label} — {amount} ({date})")
+            if len(payments_for_source) > 10:
+                block.append(f"  …и ещё {len(payments_for_source) - 10}")
+
         lines.extend(block)
 
     text = "\n".join(lines)

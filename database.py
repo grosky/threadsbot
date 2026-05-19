@@ -615,6 +615,40 @@ async def get_revenue_stats(referrer_id: int) -> list[dict]:
     return result
 
 
+async def get_payments_detailed(referrer_id: int) -> list[dict]:
+    """Список индивидуальных платежей по всем UTM-источникам реферера.
+
+    Для админ-отчёта: видно кто, сколько и когда заплатил по каждому источнику.
+
+    Возвращает список:
+    [{source, user_id, username, first_name, amount_kopecks, currency,
+      period_days, created_at}, ...]
+    Отсортировано по source, потом по дате DESC.
+    """
+    async with aiosqlite.connect(config.database_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT "
+            "  COALESCE(p.source, '(без UTM)') AS source, "
+            "  p.user_id, "
+            "  u.username, "
+            "  u.first_name, "
+            "  p.amount_kopecks, "
+            "  p.currency, "
+            "  p.period_days, "
+            "  p.created_at, "
+            "  p.event_type "
+            "FROM payments p "
+            "JOIN referrals r ON r.invitee_id = p.user_id "
+            "LEFT JOIN users u ON u.telegram_id = p.user_id "
+            "WHERE r.referrer_id = ? "
+            "ORDER BY source, p.created_at DESC",
+            (referrer_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
 async def consume_referral_reward(
     invitee_id: int, bonus_days: int = REFERRAL_BONUS_DAYS
 ) -> Optional[dict]:
