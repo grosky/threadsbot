@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -81,9 +82,58 @@ _IDEAS_CONFIG = types.GenerateContentConfig(
 
 # Gemini 3 Flash Preview (released Dec 2025) — заметно лучше 2.5 Flash,
 # по качеству близок к 2.5 Pro, при этом в 2.5 раза дешевле Pro.
-# Если в будущем модель переименуется в стабильный релиз (без "-preview"),
-# поменять здесь.
+# Preview-модели иногда падают с 503 (high demand). На такой случай
+# есть fallback на стабильную 2.5 Flash.
 _MODEL_NAME = "gemini-3-flash-preview"
+_FALLBACK_MODEL = "gemini-2.5-flash"
+
+
+def _is_503(exc: Exception) -> bool:
+    """Проверяет 503/UNAVAILABLE/высокую нагрузку."""
+    msg = str(exc).lower()
+    return any(
+        s in msg for s in (
+            "503", "unavailable", "high demand", "overloaded", "rate"
+        )
+    )
+
+
+async def _call_with_fallback(
+    contents,
+    config_obj,
+    *,
+    retry_delay: float = 2.0,
+) -> "types.GenerateContentResponse":
+    """Вызов Gemini с автоматическим retry и fallback на стабильную модель.
+
+    1. Пробуем _MODEL_NAME
+    2. При 503 — ждём retry_delay и пробуем ещё раз
+    3. Если опять 503 — переключаемся на _FALLBACK_MODEL
+    """
+    try:
+        return await _client.aio.models.generate_content(
+            model=_MODEL_NAME, contents=contents, config=config_obj,
+        )
+    except Exception as e:
+        if not _is_503(e):
+            raise
+        log.warning("Gemini %s 503, retrying after %ss: %s", _MODEL_NAME, retry_delay, e)
+        await asyncio.sleep(retry_delay)
+
+        try:
+            return await _client.aio.models.generate_content(
+                model=_MODEL_NAME, contents=contents, config=config_obj,
+            )
+        except Exception as e2:
+            if not _is_503(e2):
+                raise
+            log.warning(
+                "Gemini %s still 503, falling back to %s: %s",
+                _MODEL_NAME, _FALLBACK_MODEL, e2,
+            )
+            return await _client.aio.models.generate_content(
+                model=_FALLBACK_MODEL, contents=contents, config=config_obj,
+            )
 
 
 async def generate_posts(
@@ -108,11 +158,7 @@ async def generate_posts(
     )
 
     try:
-        response = await _client.aio.models.generate_content(
-            model=_MODEL_NAME,
-            contents=user_msg,
-            config=_GENERATION_CONFIG,
-        )
+        response = await _call_with_fallback(user_msg, _GENERATION_CONFIG)
         data = json.loads(response.text)
         variants = data["variants"]
         if not isinstance(variants, list) or len(variants) < 1:
@@ -122,11 +168,7 @@ async def generate_posts(
         # Retry с явным напоминанием о формате
         log.warning("JSON decode failed, retrying with explicit reminder")
         retry_msg = user_msg + "\n\nВЕРНИ ТОЛЬКО ВАЛИДНЫЙ JSON БЕЗ ОБРАМЛЕНИЯ."
-        response = await _client.aio.models.generate_content(
-            model=_MODEL_NAME,
-            contents=retry_msg,
-            config=_GENERATION_CONFIG,
-        )
+        response = await _call_with_fallback(retry_msg, _GENERATION_CONFIG)
         return json.loads(response.text)["variants"]
 
 
@@ -146,10 +188,8 @@ async def analyze_profile(
 
     image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
 
-    response = await _client.aio.models.generate_content(
-        model=_MODEL_NAME,
-        contents=[user_msg, image_part],
-        config=_PROFILE_ANALYSIS_CONFIG,
+    response = await _call_with_fallback(
+        [user_msg, image_part], _PROFILE_ANALYSIS_CONFIG,
     )
     return json.loads(response.text)
 
@@ -173,10 +213,8 @@ async def generate_storytelling_from_voice(
 
     audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
 
-    response = await _client.aio.models.generate_content(
-        model=_MODEL_NAME,
-        contents=[user_msg, audio_part],
-        config=_STORYTELLING_CONFIG,
+    response = await _call_with_fallback(
+        [user_msg, audio_part], _STORYTELLING_CONFIG,
     )
     return json.loads(response.text)
 
@@ -193,11 +231,7 @@ async def transform_post(
         "Transforming post: user=%s instruction='%s' len=%d",
         profile.get("telegram_id"), instruction[:60], len(original_post),
     )
-    response = await _client.aio.models.generate_content(
-        model=_MODEL_NAME,
-        contents=user_msg,
-        config=_TRANSFORM_CONFIG,
-    )
+    response = await _call_with_fallback(user_msg, _TRANSFORM_CONFIG)
     return json.loads(response.text)
 
 
@@ -213,11 +247,7 @@ async def generate_ideas(profile: dict) -> list[dict]:
         (profile.get("niche") or "—")[:60],
     )
 
-    response = await _client.aio.models.generate_content(
-        model=_MODEL_NAME,
-        contents=user_msg,
-        config=_IDEAS_CONFIG,
-    )
+    response = await _call_with_fallback(user_msg, _IDEAS_CONFIG)
     data = json.loads(response.text)
     return data.get("ideas", [])
 
@@ -235,9 +265,5 @@ async def analyze_feed(profile: dict, posts: list[str]) -> dict:
         sum(len(p) for p in posts),
     )
 
-    response = await _client.aio.models.generate_content(
-        model=_MODEL_NAME,
-        contents=user_msg,
-        config=_FEED_ANALYSIS_CONFIG,
-    )
+    response = await _call_with_fallback(user_msg, _FEED_ANALYSIS_CONFIG)
     return json.loads(response.text)
