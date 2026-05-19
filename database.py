@@ -586,16 +586,18 @@ async def get_revenue_stats(referrer_id: int) -> list[dict]:
     """
     async with aiosqlite.connect(config.database_path) as db:
         db.row_factory = aiosqlite.Row
+        # Используем p.source явно — колонка source есть и в payments, и в referrals.
+        # GROUP BY по той же выражению что в SELECT.
         async with db.execute(
             "SELECT "
-            "  COALESCE(p.source, '(без UTM)') AS source, "
+            "  COALESCE(p.source, '(без UTM)') AS src, "
             "  COUNT(DISTINCT p.user_id) AS payers, "
             "  COUNT(*) AS payments_count, "
             "  COALESCE(SUM(p.amount_kopecks), 0) AS revenue_kopecks "
             "FROM payments p "
             "JOIN referrals r ON r.invitee_id = p.user_id "
             "WHERE r.referrer_id = ? "
-            "GROUP BY source "
+            "GROUP BY COALESCE(p.source, '(без UTM)') "
             "ORDER BY revenue_kopecks DESC",
             (referrer_id,),
         ) as cur:
@@ -604,6 +606,8 @@ async def get_revenue_stats(referrer_id: int) -> list[dict]:
     result = []
     for r in rows:
         d = dict(r)
+        # Переименовываем src обратно в source для совместимости с хендлерами
+        d["source"] = d.pop("src")
         d["commission_kopecks"] = int(
             (d["revenue_kopecks"] or 0) * PARTNER_COMMISSION_PERCENT / 100
         )
