@@ -74,7 +74,7 @@ async def start_onboarding(message: Message, state: FSMContext) -> None:
 
 # ---------- Q1: НИША + ПРОДУКТ ----------
 
-@router.message(OnboardingStates.niche, F.text)
+@router.message(OnboardingStates.niche, F.text & ~F.text.startswith("/"))
 async def on_niche(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     user_id = message.from_user.id
@@ -99,7 +99,7 @@ async def on_niche(message: Message, state: FSMContext) -> None:
 
 # ---------- Q2: АУДИТОРИЯ + БОЛИ ----------
 
-@router.message(OnboardingStates.audience, F.text)
+@router.message(OnboardingStates.audience, F.text & ~F.text.startswith("/"))
 async def on_audience(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     user_id = message.from_user.id
@@ -136,7 +136,7 @@ async def on_tone(callback: CallbackQuery, state: FSMContext) -> None:
 
 # ---------- Q4: PRODUCT LINK ----------
 
-@router.message(OnboardingStates.product_link, F.text)
+@router.message(OnboardingStates.product_link, F.text & ~F.text.startswith("/"))
 async def on_product_link(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     if text.lower() in ("нет", "no", "—", "-"):
@@ -162,7 +162,7 @@ async def on_social_proof_skip(message: Message, state: FSMContext) -> None:
     await _complete_onboarding(message, state)
 
 
-@router.message(OnboardingStates.social_proof, F.text)
+@router.message(OnboardingStates.social_proof, F.text & ~F.text.startswith("/"))
 async def on_social_proof(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     await update_profile_field(message.from_user.id, "social_proof", text)

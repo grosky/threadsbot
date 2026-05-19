@@ -121,7 +121,13 @@ def _format_rub(kopecks: int) -> str:
 @router.message(Command("stats"))
 async def cmd_stats(message: Message) -> None:
     """Партнёрская воронка для админа: клики → оплаты → комиссия."""
+    log.info(
+        "cmd_stats called: user_id=%s admin_id=%s is_admin=%s",
+        message.from_user.id, config.admin_telegram_id,
+        message.from_user.id == config.admin_telegram_id,
+    )
     if not _is_admin(message.from_user.id):
+        await message.answer("⚠️ /stats — только для админа.")
         return
 
     funnel = await get_source_stats(message.from_user.id)

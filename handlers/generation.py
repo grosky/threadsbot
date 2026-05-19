@@ -170,7 +170,7 @@ async def topic_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.edit_reply_markup(reply_markup=None)
 
 
-@router.message(GenerateStates.entering_topic, F.text)
+@router.message(GenerateStates.entering_topic, F.text & ~F.text.startswith("/"))
 async def topic_entered(message: Message, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
     topic = (message.text or "").strip()
@@ -403,7 +403,7 @@ async def start_refine(callback: CallbackQuery, state: FSMContext) -> None:
     )
 
 
-@router.message(GenerateStates.waiting_refine_feedback, F.text)
+@router.message(GenerateStates.waiting_refine_feedback, F.text & ~F.text.startswith("/"))
 async def apply_refine(message: Message, state: FSMContext, bot: Bot) -> None:
     feedback = (message.text or "").strip()
     if not feedback or feedback.startswith("/"):

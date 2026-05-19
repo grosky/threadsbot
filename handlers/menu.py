@@ -5,6 +5,7 @@ from datetime import datetime
 
 from aiogram import F, Router
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -131,7 +132,16 @@ async def show_main_menu(message: Message) -> None:
 
 
 @router.message(Command("menu"))
-async def cmd_menu(message: Message) -> None:
+async def cmd_menu(message: Message, state: FSMContext) -> None:
+    """Гарантированно сбрасывает FSM-стейт и возвращает в главное меню."""
+    await state.clear()
+    await show_main_menu(message)
+
+
+@router.message(Command("reset"))
+async def cmd_reset(message: Message, state: FSMContext) -> None:
+    """Сброс любого зависшего FSM-стейта. Возвращает в главное меню."""
+    await state.clear()
     await show_main_menu(message)
 
 
