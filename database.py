@@ -1126,3 +1126,90 @@ async def get_referral_stats(referrer_id: int) -> dict:
         "rewarded": (row["rewarded"] if row else 0) or 0,
         "bonus_days_total": (row["bonus_days_total"] if row else 0) or 0,
     }
+
+
+# ---------- ADMIN ANALYTICS ----------
+
+async def get_admin_overview() -> dict:
+    """Сводка по всему боту для админ-команды /admin.
+
+    Возвращает dict с ключами:
+      total_users, onboarded, with_active_sub, used_free_trial,
+      active_24h, active_7d, gens_today, gens_7d, gens_30d,
+      revenue_total_kopecks, payments_count, threads_connected
+    """
+    now = datetime.utcnow()
+    iso_24h = (now - timedelta(hours=24)).isoformat()
+    iso_7d = (now - timedelta(days=7)).isoformat()
+    iso_30d = (now - timedelta(days=30)).isoformat()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+    async with aiosqlite.connect(config.database_path) as db:
+        db.row_factory = aiosqlite.Row
+
+        async def _scalar(query: str, params: tuple = ()) -> int:
+            async with db.execute(query, params) as cur:
+                row = await cur.fetchone()
+                if not row:
+                    return 0
+                val = row[0]
+                return int(val) if val is not None else 0
+
+        total_users = await _scalar("SELECT COUNT(*) FROM users")
+        onboarded = await _scalar(
+            "SELECT COUNT(*) FROM users WHERE onboarding_complete = 1"
+        )
+        with_active_sub = await _scalar(
+            "SELECT COUNT(*) FROM users WHERE subscription_expires_at > ?",
+            (now.isoformat(),),
+        )
+        used_free_trial = await _scalar(
+            "SELECT COUNT(*) FROM users WHERE COALESCE(free_trial_used, 0) = 1"
+        )
+
+        # «Активный» = были генерации
+        active_24h = await _scalar(
+            "SELECT COUNT(DISTINCT user_id) FROM generations WHERE created_at >= ?",
+            (iso_24h,),
+        )
+        active_7d = await _scalar(
+            "SELECT COUNT(DISTINCT user_id) FROM generations WHERE created_at >= ?",
+            (iso_7d,),
+        )
+
+        gens_today = await _scalar(
+            "SELECT COUNT(*) FROM generations WHERE created_at >= ?",
+            (today_start,),
+        )
+        gens_7d = await _scalar(
+            "SELECT COUNT(*) FROM generations WHERE created_at >= ?",
+            (iso_7d,),
+        )
+        gens_30d = await _scalar(
+            "SELECT COUNT(*) FROM generations WHERE created_at >= ?",
+            (iso_30d,),
+        )
+
+        revenue_total_kopecks = await _scalar(
+            "SELECT COALESCE(SUM(amount_kopecks), 0) FROM payments"
+        )
+        payments_count = await _scalar("SELECT COUNT(*) FROM payments")
+
+        threads_connected = await _scalar(
+            "SELECT COUNT(*) FROM threads_accounts"
+        )
+
+    return {
+        "total_users": total_users,
+        "onboarded": onboarded,
+        "with_active_sub": with_active_sub,
+        "used_free_trial": used_free_trial,
+        "active_24h": active_24h,
+        "active_7d": active_7d,
+        "gens_today": gens_today,
+        "gens_7d": gens_7d,
+        "gens_30d": gens_30d,
+        "revenue_total_kopecks": revenue_total_kopecks,
+        "payments_count": payments_count,
+        "threads_connected": threads_connected,
+    }

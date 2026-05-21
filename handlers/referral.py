@@ -120,24 +120,29 @@ def _format_rub(kopecks: int) -> str:
 
 @router.message(Command("stats"))
 async def cmd_stats(message: Message) -> None:
-    """Партнёрская воронка для админа: клики → оплаты → комиссия."""
-    log.info(
-        "cmd_stats called: user_id=%s admin_id=%s is_admin=%s",
-        message.from_user.id, config.admin_telegram_id,
-        message.from_user.id == config.admin_telegram_id,
-    )
-    if not _is_admin(message.from_user.id):
-        await message.answer("⚠️ /stats — только для админа.")
-        return
+    """Партнёрская воронка: клики → оплаты → комиссия. Каждый юзер видит свою."""
+    user_id = message.from_user.id
+    is_admin = _is_admin(user_id)
+    log.info("cmd_stats called: user_id=%s is_admin=%s", user_id, is_admin)
 
-    funnel = await get_source_stats(message.from_user.id)
-    revenue = await get_revenue_stats(message.from_user.id)
+    funnel = await get_source_stats(user_id)
+    revenue = await get_revenue_stats(user_id)
 
     if not funnel:
+        if is_admin:
+            hint = (
+                "Пока никого не приглашено.\n\n"
+                "Создай UTM-ссылку через /utm и начни раздавать партнёрам."
+            )
+        else:
+            hint = (
+                "У тебя пока нет приглашённых юзеров.\n\n"
+                "Если ты — партнёр, попроси у админа партнёрскую UTM-ссылку. "
+                "По ней каждый клик и оплата будут учитываться здесь.\n\n"
+                "Или используй обычную ссылку для друзей: /invite"
+            )
         await message.answer(
-            "📊 <b>Партнёрская статистика</b>\n\n"
-            "Пока никого не приглашено.\n\n"
-            "Создай UTM-ссылку через /utm и начни раздавать партнёрам."
+            "📊 <b>Партнёрская статистика</b>\n\n" + hint
         )
         return
 
