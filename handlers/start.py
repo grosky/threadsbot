@@ -115,7 +115,7 @@ def _build_welcome_text() -> str:
     lines.extend([
         "",
         "🎁 <b>Первая генерация — бесплатно.</b>",
-        "Жми кнопку ниже 👇",
+        "Жми кнопку ниже.",
     ])
     return "\n".join(lines)
 
