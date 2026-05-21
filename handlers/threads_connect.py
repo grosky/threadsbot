@@ -233,6 +233,9 @@ def post_actions_keyboard(post_key: str) -> InlineKeyboardMarkup:
             callback_data=f"publish:threads:{post_key}",
         )])
     rows.append([
+        InlineKeyboardButton(text="🫶 Очеловечить", callback_data=f"post:humanize:{post_key}"),
+    ])
+    rows.append([
         InlineKeyboardButton(text="🔥 Жёстче", callback_data=f"post:harder:{post_key}"),
         InlineKeyboardButton(text="😌 Мягче", callback_data=f"post:softer:{post_key}"),
         InlineKeyboardButton(text="✏️ Доработать", callback_data=f"post:refine:{post_key}"),

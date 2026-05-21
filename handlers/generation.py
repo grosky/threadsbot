@@ -30,7 +30,7 @@ from database import (
     mark_free_trial_used,
     touch_streak,
 )
-from gemini_service import generate_posts, transform_post
+from gemini_service import generate_posts, humanize_post, transform_post
 from prompts import FORMAT_DETAILS, FORMAT_OPTIONS
 
 from .threads_connect import (
@@ -329,7 +329,7 @@ def _admin_id() -> int:
     return config.admin_telegram_id
 
 
-# ---------- ПОСТ-АКТИВЫ: ЖЁСТЧЕ / МЯГЧЕ ----------
+# ---------- ПОСТ-АКТИВЫ: ЖЁСТЧЕ / МЯГЧЕ / ОЧЕЛОВЕЧИТЬ ----------
 
 @router.callback_query(F.data.startswith("post:harder:"))
 async def make_harder(callback: CallbackQuery, bot: Bot) -> None:
@@ -339,6 +339,69 @@ async def make_harder(callback: CallbackQuery, bot: Bot) -> None:
 @router.callback_query(F.data.startswith("post:softer:"))
 async def make_softer(callback: CallbackQuery, bot: Bot) -> None:
     await _transform(callback, bot, "Перепиши пост МЯГЧЕ. Убери агрессию, добавь эмпатии, ВЫ-форма.")
+
+
+@router.callback_query(F.data.startswith("post:humanize:"))
+async def make_humanize(callback: CallbackQuery, bot: Bot) -> None:
+    """Переписывает пост в живой голос реального автора (отдельный системный промт)."""
+    user_id = callback.from_user.id
+    post_key = callback.data.split(":", 2)[2]
+
+    original = await get_post(user_id, post_key)
+    if not original:
+        await callback.answer(
+            "Текст поста потерян (старше 24 ч). Сгенерируй заново.",
+            show_alert=True,
+        )
+        return
+
+    if not await is_subscription_active(user_id):
+        await callback.answer("Подписка неактивна", show_alert=True)
+        return
+
+    can_gen, _ = await can_generate_today(user_id)
+    if not can_gen:
+        await callback.answer("Дневной лимит исчерпан", show_alert=True)
+        return
+
+    profile = await get_user(user_id)
+    if not profile:
+        await callback.answer("Профиль не найден", show_alert=True)
+        return
+
+    await callback.answer("Очеловечиваю...")
+    status_msg = await callback.message.answer(
+        "🧠 Переписываю человеческим голосом... ~15-20 секунд"
+    )
+
+    try:
+        result = await humanize_post(profile, original)
+    except Exception as e:
+        log.exception("Humanize failed for user %s", user_id)
+        await status_msg.edit_text(
+            f"❌ Не получилось. <code>{html.escape(type(e).__name__)}: "
+            f"{html.escape(str(e))[:200]}</code>"
+        )
+        return
+
+    await log_generation(user_id, "humanize", None)
+    await status_msg.delete()
+
+    new_post = str(result.get("post", ""))
+    summary = str(result.get("summary", "переписал в живом голосе"))
+
+    new_key = f"h{int(_time.time())}"
+    await remember_post(user_id, new_key, new_post)
+
+    safe_post = html.escape(new_post)
+    header = f"🫶 <b>Очеловечено</b>\n<i>{html.escape(summary)}</i>\n\n"
+    full = header + safe_post
+    if len(full) > 4000:
+        full = header + safe_post[:3700] + "\n…(обрезано)"
+    await callback.message.answer(
+        full,
+        reply_markup=post_actions_keyboard(new_key),
+    )
 
 
 async def _transform(callback: CallbackQuery, bot: Bot, instruction: str) -> None:

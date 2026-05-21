@@ -15,6 +15,8 @@ from config import config
 from prompts import (
     FEED_ANALYSIS_PROMPT,
     FEED_ANALYSIS_SCHEMA,
+    HUMANIZE_PROMPT,
+    HUMANIZE_SCHEMA,
     IDEAS_PROMPT,
     IDEAS_SCHEMA,
     PROFILE_ANALYSIS_PROMPT,
@@ -32,6 +34,7 @@ from prompts import (
     TRANSFORM_PROMPT,
     TRANSFORM_SCHEMA,
     build_feed_analysis_message,
+    build_humanize_message,
     build_ideas_user_message,
     build_profile_analysis_message,
     build_profile_packaging_message,
@@ -78,6 +81,14 @@ _TRANSFORM_CONFIG = types.GenerateContentConfig(
     temperature=0.8,
     response_mime_type="application/json",
     response_schema=TRANSFORM_SCHEMA,
+)
+
+# Humanize: больше temperature для более вариативного «живого» голоса
+_HUMANIZE_CONFIG = types.GenerateContentConfig(
+    system_instruction=HUMANIZE_PROMPT,
+    temperature=1.0,
+    response_mime_type="application/json",
+    response_schema=HUMANIZE_SCHEMA,
 )
 
 _IDEAS_CONFIG = types.GenerateContentConfig(
@@ -256,6 +267,23 @@ async def transform_post(
         profile.get("telegram_id"), instruction[:60], len(original_post),
     )
     response = await _call_with_fallback(user_msg, _TRANSFORM_CONFIG)
+    return json.loads(response.text)
+
+
+async def humanize_post(profile: dict, original_post: str) -> dict:
+    """Переписывает AI-пост в живой голос реального автора.
+
+    Возвращает {post, summary}. Использует отдельный системный промт с
+    правилами «нормального взрослого автора» — длинные предложения с запятыми,
+    личная история с конкретикой, без рваных коротких предложений подряд,
+    без опечаток/капса/мата.
+    """
+    user_msg = build_humanize_message(original_post, profile)
+    log.info(
+        "Humanizing post: user=%s len=%d",
+        profile.get("telegram_id"), len(original_post),
+    )
+    response = await _call_with_fallback(user_msg, _HUMANIZE_CONFIG)
     return json.loads(response.text)
 
 
