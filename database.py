@@ -176,6 +176,14 @@ async def _migrate_users_columns(db: aiosqlite.Connection) -> None:
         await db.execute(
             "ALTER TABLE users ADD COLUMN profile_pack_json TEXT"
         )
+    if "followup_start_at" not in cols:
+        await db.execute(
+            "ALTER TABLE users ADD COLUMN followup_start_at TIMESTAMP"
+        )
+    if "followup_sent_mask" not in cols:
+        await db.execute(
+            "ALTER TABLE users ADD COLUMN followup_sent_mask INTEGER DEFAULT 0"
+        )
 
 
 async def _migrate_referrals_columns(db: aiosqlite.Connection) -> None:
@@ -276,6 +284,66 @@ async def update_profile_pack_block(
     current = await get_profile_pack(telegram_id) or {}
     current[block_key] = value
     await save_profile_pack(telegram_id, current)
+
+
+# ---------- FOLLOWUP DRIP (3 сообщения после /start если не оплатил) ----------
+#
+# Маска: бит 0 = первое сообщение (15м), бит 1 = второе (1ч), бит 2 = третье (3ч).
+# Маска = 7 → все три выставлены / цепочка прервана (оплата, блок, ручная отмена).
+
+FOLLOWUP_DONE_MASK = 0b111  # все 3 бита выставлены
+
+
+async def start_followup_timer(telegram_id: int) -> None:
+    """Запускает таймер догрева: NOW() как точка отсчёта, маска обнулена."""
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "UPDATE users SET followup_start_at = ?, followup_sent_mask = 0 "
+            "WHERE telegram_id = ?",
+            (datetime.utcnow().isoformat(), telegram_id),
+        )
+        await db.commit()
+
+
+async def cancel_followups(telegram_id: int) -> None:
+    """Прерывает цепочку догрева — больше ничего не отправляем."""
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "UPDATE users SET followup_sent_mask = ? WHERE telegram_id = ?",
+            (FOLLOWUP_DONE_MASK, telegram_id),
+        )
+        await db.commit()
+
+
+async def mark_followup_sent(telegram_id: int, position: int) -> None:
+    """Выставляет бит position (0/1/2) в маске."""
+    if position not in (0, 1, 2):
+        raise ValueError(f"Invalid followup position: {position}")
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "UPDATE users SET followup_sent_mask = followup_sent_mask | ? "
+            "WHERE telegram_id = ?",
+            (1 << position, telegram_id),
+        )
+        await db.commit()
+
+
+async def get_followup_candidates() -> list[dict]:
+    """Возвращает юзеров у кого таймер запущен и цепочка не завершена.
+
+    Фильтр по времени и битам делается в Python (проще и быстрее).
+    """
+    async with aiosqlite.connect(config.database_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT telegram_id, followup_start_at, followup_sent_mask, "
+            "       subscription_expires_at "
+            "FROM users "
+            "WHERE followup_start_at IS NOT NULL "
+            "  AND COALESCE(followup_sent_mask, 0) < ?",
+            (FOLLOWUP_DONE_MASK,),
+        ) as cur:
+            return [dict(row) for row in await cur.fetchall()]
 
 
 async def is_subscription_active(telegram_id: int) -> bool:

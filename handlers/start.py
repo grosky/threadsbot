@@ -26,6 +26,7 @@ from config import config
 from database import (
     activate_promocode,
     can_use_free_trial,
+    cancel_followups,
     consume_referral_reward,
     create_promocode,
     create_user,
@@ -33,6 +34,7 @@ from database import (
     has_access,
     is_subscription_active,
     set_referrer_if_new,
+    start_followup_timer,
 )
 
 from .menu import show_main_menu
@@ -173,6 +175,16 @@ async def _show_welcome(message: Message, user_id: int) -> None:
 
 # ---------- /start ----------
 
+@router.message(Command("stop_followups"))
+async def cmd_stop_followups(message: Message) -> None:
+    """Юзер отписывается от догревочных сообщений вручную."""
+    await cancel_followups(message.from_user.id)
+    await message.answer(
+        "Окей, больше не буду присылать напоминания. "
+        "Бот доступен по /menu в любой момент."
+    )
+
+
 @router.message(CommandStart())
 async def handle_start(
     message: Message, command: CommandObject, state: FSMContext
@@ -206,7 +218,11 @@ async def handle_start(
             await show_main_menu(message)
         return
 
-    # 2. Нет подписки — welcome screen или paywall
+    # 2. Нет подписки — welcome screen или paywall.
+    # Если followup-цепочка ещё не запускалась — запускаем сейчас (3 сообщения
+    # через 15м / 1ч / 3ч). Если уже запускалась — не трогаем, чтоб не зациклить.
+    if user and user.get("followup_start_at") is None:
+        await start_followup_timer(user_tg.id)
     await _show_welcome(message, user_tg.id)
 
 
@@ -302,6 +318,9 @@ async def handle_promocode_input(
         ]])
         await message.answer(f"❌ {msg}\n\nПопробуй ещё раз или вернись:", reply_markup=kb)
         return
+
+    # Промокод активирован = доступ есть, догрев больше не нужен
+    await cancel_followups(user_id)
 
     await message.answer(f"✅ {msg}")
     await state.clear()

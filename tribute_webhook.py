@@ -24,6 +24,7 @@ from config import config
 from database import (
     consume_referral_reward,
     create_user,
+    cancel_followups,
     extend_subscription_days,
     log_payment,
 )
@@ -210,6 +211,9 @@ async def _handle_subscription(bot: Bot, payload: dict) -> web.Response:
     amount, currency = _extract_amount_and_currency(payload)
     new_expires = await extend_subscription_days(user_id, days)
 
+    # Оплата — обрываем догревочную цепочку, если она была активна
+    await cancel_followups(user_id)
+
     # Логируем платёж для партнёрской статистики
     await log_payment(
         user_id=user_id,
@@ -268,6 +272,9 @@ async def _handle_digital_product(bot: Bot, payload: dict) -> web.Response:
     days = _extract_period_days(payload)
     amount, currency = _extract_amount_and_currency(payload)
     new_expires = await extend_subscription_days(user_id, days)
+
+    # Оплата — обрываем догревочную цепочку
+    await cancel_followups(user_id)
 
     await log_payment(
         user_id=user_id,
