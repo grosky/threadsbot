@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
@@ -9,11 +10,16 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
+    FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
     ReplyKeyboardRemove,
 )
+
+# Картинка-социалка которая показывается новым юзерам в welcome.
+# Лежит в репо в assets/, отправляется отдельным сообщением перед текстом.
+WELCOME_PROOF_IMAGE = Path(__file__).resolve().parent.parent / "assets" / "welcome_proof.jpg"
 
 from achievements import REFERRAL_RELATED, check_and_award
 from config import config
@@ -151,6 +157,14 @@ async def _show_welcome(message: Message, user_id: int) -> None:
     if trial_ok:
         text = _build_welcome_text()
         kb = welcome_keyboard(show_trial=True)
+        # Сначала — соц-доказательство картинкой, потом длинный текст с кнопками.
+        # Caption Telegram-фото ограничен 1024 символами, а welcome ~2000, поэтому
+        # отправляем двумя сообщениями.
+        if WELCOME_PROOF_IMAGE.exists():
+            try:
+                await message.answer_photo(FSInputFile(WELCOME_PROOF_IMAGE))
+            except Exception:
+                log.exception("Failed to send welcome proof image — fallback to text only")
     else:
         text = _build_paywall_text()
         kb = welcome_keyboard(show_trial=False)
