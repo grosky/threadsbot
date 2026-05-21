@@ -41,6 +41,7 @@ def create_menu_keyboard() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="🎯 Сгенерить пост", callback_data="action:generate")],
         [InlineKeyboardButton(text="💡 Идеи для постов", callback_data="action:ideas")],
+        [InlineKeyboardButton(text="🔥 Что залетает в Threads", callback_data="action:trends")],
         [InlineKeyboardButton(text="🎙 Голосовой сторителлинг", callback_data="action:storytelling")],
         [InlineKeyboardButton(text="🆕 Упаковать профиль", callback_data="action:pack_profile")],
     ]
@@ -168,6 +169,7 @@ async def go_create(callback: CallbackQuery) -> None:
         "",
         "🎯 <b>Сгенерить</b> — 3 варианта поста по теме",
         "💡 <b>Идеи</b> — бот предложит 10 идей под твою нишу",
+        "🔥 <b>Что залетает</b> — свежие вирусные ветки в Threads по категориям",
         "🎙 <b>Голосом</b> — наговариваешь идею, бот собирает сторителлинг",
         "🆕 <b>Упаковать профиль</b> — имя, bio, ссылка, закреп — с нуля под твою нишу",
     ]

@@ -12,6 +12,7 @@ from database import cleanup_old_pending_posts, init_db
 from followups import followup_loop
 from handlers import setup_routers
 from oauth_server import start_http_server
+from viral_collector import viral_collector_loop
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,6 +64,8 @@ async def main() -> None:
     cleanup_task = asyncio.create_task(_pending_posts_cleanup_loop())
     # Догревочная цепочка: 3 сообщения для юзеров, нажавших /start без оплаты
     followup_task = asyncio.create_task(followup_loop(bot))
+    # Сбор виральных постов из Threads через keyword_search (admin token)
+    viral_task = asyncio.create_task(viral_collector_loop())
 
     log.info("Запуск polling...")
     try:
@@ -72,6 +75,7 @@ async def main() -> None:
     finally:
         cleanup_task.cancel()
         followup_task.cancel()
+        viral_task.cancel()
         if http_runner is not None:
             await http_runner.cleanup()
         await bot.session.close()

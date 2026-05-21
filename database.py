@@ -160,6 +160,22 @@ CREATE TABLE IF NOT EXISTS partner_links (
 
 CREATE INDEX IF NOT EXISTS idx_partner_links_partner
     ON partner_links(partner_telegram_id);
+
+CREATE TABLE IF NOT EXISTS viral_posts (
+    threads_id TEXT PRIMARY KEY,
+    permalink TEXT NOT NULL,
+    text TEXT,
+    username TEXT,
+    replies_count INTEGER DEFAULT 0,
+    posted_at TIMESTAMP,
+    keyword TEXT NOT NULL,
+    fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_viral_keyword_posted
+    ON viral_posts(keyword, posted_at);
+CREATE INDEX IF NOT EXISTS idx_viral_fetched_at
+    ON viral_posts(fetched_at);
 """
 
 # Стандартная комиссия партнёру в процентах от платежа.
@@ -1188,6 +1204,70 @@ async def get_partner_links(partner_telegram_id: int) -> list[dict]:
             (partner_telegram_id,),
         ) as cur:
             return [dict(row) for row in await cur.fetchall()]
+
+
+# ---------- VIRAL POSTS (кэш топовых веток через threads_keyword_search) ----------
+
+async def upsert_viral_post(
+    threads_id: str,
+    permalink: str,
+    text: str,
+    username: str,
+    replies_count: int,
+    posted_at: Optional[datetime],
+    keyword: str,
+) -> None:
+    """Сохраняет или обновляет пост в кэше виралок. Уникален по threads_id."""
+    posted_iso = posted_at.isoformat() if posted_at else None
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "INSERT INTO viral_posts "
+            "(threads_id, permalink, text, username, replies_count, posted_at, keyword) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(threads_id) DO UPDATE SET "
+            "  replies_count = excluded.replies_count, "
+            "  fetched_at = CURRENT_TIMESTAMP",
+            (threads_id, permalink, text, username, replies_count, posted_iso, keyword),
+        )
+        await db.commit()
+
+
+async def get_viral_posts_by_keyword(
+    keyword: str, limit: int = 5, max_age_days: int = 7
+) -> list[dict]:
+    """Возвращает топ постов по keyword за последние N дней, по replies_count."""
+    cutoff = (datetime.utcnow() - timedelta(days=max_age_days)).isoformat()
+    async with aiosqlite.connect(config.database_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM viral_posts "
+            "WHERE keyword = ? AND COALESCE(posted_at, fetched_at) >= ? "
+            "ORDER BY replies_count DESC, posted_at DESC "
+            "LIMIT ?",
+            (keyword, cutoff, limit),
+        ) as cur:
+            return [dict(row) for row in await cur.fetchall()]
+
+
+async def get_viral_keywords_available() -> list[str]:
+    """Список keywords по которым уже есть посты в кэше."""
+    async with aiosqlite.connect(config.database_path) as db:
+        async with db.execute(
+            "SELECT DISTINCT keyword FROM viral_posts ORDER BY keyword"
+        ) as cur:
+            return [row[0] for row in await cur.fetchall()]
+
+
+async def cleanup_old_viral_posts(days: int = 30) -> int:
+    """Удаляет посты старше N дней (по дате публикации). Возвращает кол-во удалённых."""
+    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    async with aiosqlite.connect(config.database_path) as db:
+        cur = await db.execute(
+            "DELETE FROM viral_posts WHERE COALESCE(posted_at, fetched_at) < ?",
+            (cutoff,),
+        )
+        await db.commit()
+        return cur.rowcount or 0
 
 
 # ---------- ADMIN ANALYTICS ----------

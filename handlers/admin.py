@@ -17,6 +17,7 @@ from database import (
     get_admin_overview,
     get_user,
 )
+from viral_collector import collect_once
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -202,4 +203,34 @@ async def cmd_make_partner(
         f"Source: <code>{source}</code>\n\n"
         f"<b>Ссылка:</b>\n<code>{link}</code>\n\n"
         f"{notify_status}"
+    )
+
+
+# ---------- /refresh_trends ----------
+
+@router.message(Command("refresh_trends"))
+async def cmd_refresh_trends(message: Message) -> None:
+    """Форс-обновление кэша виральных постов. Только для админа."""
+    if not _is_admin(message.from_user.id):
+        return
+
+    status = await message.answer(
+        "🧠 Запускаю сбор виральных постов... "
+        "Это займёт ~30-60 секунд (зависит от числа ключевых слов)."
+    )
+    try:
+        stats = await collect_once()
+    except Exception as e:
+        log.exception("Manual viral collect failed")
+        await status.edit_text(
+            f"❌ Не получилось: <code>{type(e).__name__}: {str(e)[:200]}</code>"
+        )
+        return
+
+    await status.edit_text(
+        "✅ <b>Сбор завершён</b>\n\n"
+        f"Ключевых слов обработано: <b>{stats['keywords_done']}</b>\n"
+        f"Постов сохранено/обновлено: <b>{stats['posts_saved']}</b>\n"
+        f"Ошибок: <b>{stats['errors']}</b>\n\n"
+        "Проверь через /trends что появилось."
     )

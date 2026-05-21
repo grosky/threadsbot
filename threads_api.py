@@ -32,11 +32,13 @@ TOKEN_URL = "https://graph.threads.net/oauth/access_token"
 LONG_LIVED_TOKEN_URL = "https://graph.threads.net/access_token"
 GRAPH_BASE = "https://graph.threads.net/v1.0"
 
-# Scopes для публикации.
-# threads_manage_replies нужен для создания цепочек (reply_to_id),
-# иначе Meta блокирует второй и последующие посты тред-чейна с
-# «Application does not have permission for this action».
-SCOPES = "threads_basic,threads_content_publish,threads_manage_replies"
+# Scopes для публикации + сбора виралок.
+# - threads_manage_replies — для цепочек (reply_to_id) при публикации длинных постов
+# - threads_keyword_search — для админского сборщика трендов (viral_collector)
+SCOPES = (
+    "threads_basic,threads_content_publish,"
+    "threads_manage_replies,threads_keyword_search"
+)
 
 # State token TTL (защита от устаревших OAuth-сессий)
 STATE_TTL_SECONDS = 600  # 10 минут
@@ -249,6 +251,46 @@ async def get_me(access_token: str) -> dict:
             if resp.status != 200:
                 raise RuntimeError(f"Get me failed [{resp.status}]: {text}")
             return json.loads(text)
+
+
+# ---------- KEYWORD SEARCH (для сборщика трендов) ----------
+
+async def keyword_search(
+    access_token: str,
+    keyword: str,
+    limit: int = 25,
+    search_type: str = "TOP",
+) -> list[dict]:
+    """Дёргает /keyword_search для сбора публичных постов по ключевому слову.
+
+    Требует scope threads_keyword_search в access_token.
+
+    search_type:
+      - "TOP" — топовые посты (по relevance + engagement)
+      - "RECENT" — самые свежие
+
+    Возвращает список dict'ов с полями:
+      id, text, permalink, username, timestamp, replies_count
+    """
+    fields = "id,text,permalink,username,timestamp,replies_count"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            f"{GRAPH_BASE}/keyword_search",
+            params={
+                "q": keyword,
+                "search_type": search_type,
+                "fields": fields,
+                "limit": limit,
+                "access_token": access_token,
+            },
+        ) as resp:
+            text = await resp.text()
+            if resp.status != 200:
+                raise RuntimeError(
+                    f"keyword_search failed [{resp.status}] q={keyword!r}: {text[:300]}"
+                )
+            data = json.loads(text)
+            return data.get("data", [])
 
 
 # ---------- РАЗБИЕНИЕ ТЕКСТА НА ТРЕД ----------
