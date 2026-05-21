@@ -148,6 +148,18 @@ CREATE TABLE IF NOT EXISTS payments (
 
 CREATE INDEX IF NOT EXISTS idx_payments_source ON payments(source);
 CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id);
+
+CREATE TABLE IF NOT EXISTS partner_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_telegram_id INTEGER NOT NULL,
+    source TEXT NOT NULL UNIQUE,
+    link TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (partner_telegram_id) REFERENCES users(telegram_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_partner_links_partner
+    ON partner_links(partner_telegram_id);
 """
 
 # Стандартная комиссия партнёру в процентах от платежа.
@@ -1126,6 +1138,56 @@ async def get_referral_stats(referrer_id: int) -> dict:
         "rewarded": (row["rewarded"] if row else 0) or 0,
         "bonus_days_total": (row["bonus_days_total"] if row else 0) or 0,
     }
+
+
+# ---------- PARTNER LINKS ----------
+
+async def find_user_by_username(username: str) -> Optional[dict]:
+    """Ищет юзера в БД по @username (без @). Username хранится без @."""
+    clean = username.lstrip("@").strip()
+    if not clean:
+        return None
+    async with aiosqlite.connect(config.database_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM users WHERE LOWER(username) = LOWER(?)",
+            (clean,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def find_partner_by_source(source: str) -> Optional[dict]:
+    async with aiosqlite.connect(config.database_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM partner_links WHERE source = ?", (source,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def add_partner_link(
+    partner_telegram_id: int, source: str, link: str
+) -> None:
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "INSERT INTO partner_links (partner_telegram_id, source, link) "
+            "VALUES (?, ?, ?)",
+            (partner_telegram_id, source, link),
+        )
+        await db.commit()
+
+
+async def get_partner_links(partner_telegram_id: int) -> list[dict]:
+    async with aiosqlite.connect(config.database_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM partner_links WHERE partner_telegram_id = ? "
+            "ORDER BY created_at ASC",
+            (partner_telegram_id,),
+        ) as cur:
+            return [dict(row) for row in await cur.fetchall()]
 
 
 # ---------- ADMIN ANALYTICS ----------

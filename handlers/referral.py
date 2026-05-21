@@ -12,6 +12,7 @@ from config import config
 from database import (
     PARTNER_COMMISSION_PERCENT,
     REFERRAL_BONUS_DAYS,
+    get_partner_links,
     get_referral_stats,
     get_revenue_stats,
     get_source_stats,
@@ -128,23 +129,36 @@ async def cmd_stats(message: Message) -> None:
     funnel = await get_source_stats(user_id)
     revenue = await get_revenue_stats(user_id)
 
-    if not funnel:
+    # Партнёрские ссылки (даже если по ним 0 кликов — покажем партнёру)
+    partner_links = [] if is_admin else await get_partner_links(user_id)
+
+    if not funnel and not partner_links:
         if is_admin:
             hint = (
                 "Пока никого не приглашено.\n\n"
-                "Создай UTM-ссылку через /utm и начни раздавать партнёрам."
+                "Создай UTM-ссылку через /utm для собственных каналов "
+                "или зарегистрируй партнёра через /make_partner."
             )
         else:
             hint = (
-                "У тебя пока нет приглашённых юзеров.\n\n"
-                "Если ты — партнёр, попроси у админа партнёрскую UTM-ссылку. "
-                "По ней каждый клик и оплата будут учитываться здесь.\n\n"
+                "У тебя пока нет партнёрских ссылок.\n\n"
+                "Если ты должен быть партнёром — попроси админа зарегистрировать тебя.\n\n"
                 "Или используй обычную ссылку для друзей: /invite"
             )
         await message.answer(
             "📊 <b>Партнёрская статистика</b>\n\n" + hint
         )
         return
+
+    # Заполняем funnel заглушками для partner_links по которым ещё не кликали
+    seen_sources = {row["source"] for row in funnel}
+    for pl in partner_links:
+        if pl["source"] not in seen_sources:
+            funnel.append({"source": pl["source"], "invited": 0})
+            seen_sources.add(pl["source"])
+
+    # Линк-карта source → link для красивого вывода
+    link_by_source = {pl["source"]: pl["link"] for pl in partner_links}
 
     # Объединяем воронку + revenue по source
     revenue_by_source = {r["source"]: r for r in revenue}
@@ -191,9 +205,13 @@ async def cmd_stats(message: Message) -> None:
 
         block = [
             f"\n<b><code>{src}</code></b>",
+        ]
+        if src in link_by_source:
+            block.append(f"  Ссылка: <code>{link_by_source[src]}</code>")
+        block.extend([
             f"  Кликов: {clicks}",
             f"  Оплатили: {payers} ({conv})",
-        ]
+        ])
         if payments > 1:
             block.append(f"  Платежей всего: {payments}")
         if rev_kop:

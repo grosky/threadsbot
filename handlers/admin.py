@@ -1,17 +1,28 @@
-"""Админские команды: общая статистика по боту."""
+"""Админские команды: общая статистика по боту + управление партнёрами."""
 from __future__ import annotations
 
 import logging
+import re
 
-from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramForbiddenError
+from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
 from config import config
-from database import get_admin_overview
+from database import (
+    add_partner_link,
+    find_partner_by_source,
+    find_user_by_username,
+    get_admin_overview,
+    get_user,
+)
 
 router = Router()
 log = logging.getLogger(__name__)
+
+# UTM-источник: латиница/цифры/_/-, до 30 символов (как в /utm)
+_SOURCE_RE = re.compile(r"^[a-z0-9_\-]{1,30}$")
 
 
 def _is_admin(user_id: int) -> bool:
@@ -71,3 +82,124 @@ async def cmd_admin(message: Message) -> None:
     ]
 
     await message.answer("\n".join(lines))
+
+
+# ---------- /make_partner ----------
+
+@router.message(Command("make_partner"))
+async def cmd_make_partner(
+    message: Message, command: CommandObject, bot: Bot
+) -> None:
+    """Регистрирует партнёра с собственной UTM-ссылкой.
+
+    Использование: /make_partner <source> <@username | user_id>
+    Пример: /make_partner anna_blog @anna_2024
+    Пример: /make_partner partner_misha 123456789
+    """
+    if not _is_admin(message.from_user.id):
+        return
+
+    args = (command.args or "").strip()
+    if not args:
+        await message.answer(
+            "🤝 <b>Регистрация партнёра</b>\n\n"
+            "Использование: <code>/make_partner &lt;source&gt; &lt;@username | user_id&gt;</code>\n\n"
+            "Примеры:\n"
+            "<code>/make_partner anna_blog @anna_2024</code>\n"
+            "<code>/make_partner partner_misha 123456789</code>\n\n"
+            "Партнёр должен сначала запустить бот через /start "
+            "чтобы попасть в БД."
+        )
+        return
+
+    parts = args.split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer(
+            "❌ Нужны 2 аргумента: source и @username/ID.\n\n"
+            "Пример: <code>/make_partner anna_blog @anna_2024</code>"
+        )
+        return
+
+    source, target = parts[0].lower(), parts[1].strip()
+
+    if not _SOURCE_RE.match(source):
+        await message.answer(
+            "❌ Source должен быть до 30 символов: латиница, цифры, "
+            "<code>_</code> или <code>-</code>.\n\n"
+            "Например: <code>anna_blog</code>, <code>partner-misha</code>"
+        )
+        return
+
+    existing = await find_partner_by_source(source)
+    if existing:
+        await message.answer(
+            f"❌ Source <code>{source}</code> уже занят. "
+            f"Привязан к партнёру <code>{existing['partner_telegram_id']}</code>."
+        )
+        return
+
+    # Резолв партнёра: либо @username, либо user_id
+    partner = None
+    if target.startswith("@") or not target.lstrip("-").isdigit():
+        partner = await find_user_by_username(target)
+        resolve_hint = f"username «{target}»"
+    else:
+        try:
+            partner_id = int(target)
+        except ValueError:
+            partner_id = None
+        if partner_id:
+            partner = await get_user(partner_id)
+        resolve_hint = f"ID {target}"
+
+    if not partner:
+        await message.answer(
+            f"❌ Партнёр {resolve_hint} не найден в БД.\n\n"
+            f"Попроси его запустить бот через /start — после этого попробуй снова."
+        )
+        return
+
+    partner_id = int(partner["telegram_id"])
+
+    me = await bot.get_me()
+    link = f"https://t.me/{me.username}?start=ref_{partner_id}_{source}"
+
+    await add_partner_link(partner_id, source, link)
+
+    # Уведомляем партнёра
+    partner_notified = False
+    try:
+        await bot.send_message(
+            chat_id=partner_id,
+            text=(
+                "🤝 <b>Тебя добавили партнёром Lazy Threads!</b>\n\n"
+                "За каждого приглашённого юзера, который оформит подписку, "
+                f"ты получаешь <b>30% от платежа</b>.\n\n"
+                f"<b>Твоя ссылка</b> (источник <code>{source}</code>):\n"
+                f"<code>{link}</code>\n\n"
+                "Раздавай её — каждый клик и оплата будут отслеживаться. "
+                "Статистика — команда /stats."
+            ),
+        )
+        partner_notified = True
+    except TelegramForbiddenError:
+        log.warning("Cannot notify partner %s — they blocked the bot", partner_id)
+    except Exception:
+        log.exception("Failed to notify partner %s", partner_id)
+
+    # Подтверждение админу
+    notify_status = (
+        "✅ Партнёр уведомлён в личке."
+        if partner_notified
+        else "⚠️ Партнёр не уведомлён — он не открывал чат с ботом. "
+             "Скинь ему ссылку вручную."
+    )
+
+    username_str = f" (@{partner['username']})" if partner.get("username") else ""
+    await message.answer(
+        f"🤝 <b>Партнёр зарегистрирован</b>\n\n"
+        f"ID: <code>{partner_id}</code>{username_str}\n"
+        f"Source: <code>{source}</code>\n\n"
+        f"<b>Ссылка:</b>\n<code>{link}</code>\n\n"
+        f"{notify_status}"
+    )
