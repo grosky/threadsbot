@@ -38,12 +38,19 @@ log = logging.getLogger(__name__)
 async def start_ideas(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
 
-    access_ok, _ = await has_access(user_id)
-    if not access_ok:
+    if not await is_subscription_active(user_id):
         await callback.answer()
-        await callback.message.answer(
-            "🔓 Бесплатная генерация уже использована. /start → «💎 Оформить подписку»."
-        )
+        from database import can_use_free_trial as _can_trial
+        if await _can_trial(user_id):
+            await callback.message.answer(
+                "🔓 <b>Идеи доступны по подписке.</b>\n\n"
+                "Но у тебя есть <b>одна бесплатная генерация</b> — вернись в "
+                "/menu → 📝 Создание → 🎁 «Сгенерить бесплатный пост»."
+            )
+        else:
+            await callback.message.answer(
+                "🔓 Идеи доступны по подписке. Оформи через /start."
+            )
         return
 
     user = await get_user(user_id)
@@ -130,11 +137,10 @@ async def use_idea(callback: CallbackQuery, state: FSMContext) -> None:
         )
         return
 
-    access_ok, _ = await has_access(user_id)
-    if not access_ok:
+    if not await is_subscription_active(user_id):
         await callback.answer()
         await callback.message.answer(
-            "🔓 Бесплатная генерация использована. /start → «💎 Оформить подписку»."
+            "🔓 Развитие идей доступно по подписке. Оформи через /start."
         )
         return
 

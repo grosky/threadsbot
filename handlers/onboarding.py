@@ -193,7 +193,16 @@ async def _complete_onboarding(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id
     await mark_onboarding_complete(user_id)
 
-    # Спрашиваем — упаковать ли профиль с нуля
+    sub_active = await is_subscription_active(user_id)
+    trial_available = await can_use_free_trial(user_id)
+
+    # Упаковка профиля доступна только по подписке. Free-trial юзерам
+    # сразу указываем на бесплатную генерацию поста — это их главное действие.
+    if not sub_active and trial_available:
+        await _finalize_onboarding_without_packaging(message, state)
+        return
+
+    # Подписчикам предлагаем упаковку профиля
     await message.answer(
         "<b>Профиль настроен.</b>\n\n"
         "Сначала скажи — у тебя <b>уже есть профиль в Threads</b> с именем, "
@@ -233,25 +242,14 @@ async def _finalize_onboarding_without_packaging(message: Message, state: FSMCon
     trial_available = await can_use_free_trial(user_id)
 
     if not sub_active and trial_available:
-        from config import config as _cfg
-        sub_lines = [
-            "— 4 генерации в день",
-            "— Анализ профиля и чужих лент",
-            "— Доработка постов (жёстче / мягче / по фидбеку)",
-        ]
-        if _cfg.threads_publish_enabled:
-            sub_lines.insert(1, "— Авто-публикация в Threads")
-        sub_text = "\n".join(sub_lines)
-
         await message.answer(
-            "Окей.\n\n"
-            "Что доступно бесплатно (одна попытка):\n"
-            "— Сгенерить пост в одном из 5 форматов\n"
-            "— Голосовой сторителлинг — наговариваешь, "
-            "бот собирает живой пост\n\n"
-            "Что откроется после подписки:\n"
-            f"{sub_text}\n\n"
-            "Жми «Меню» → «Создание» чтобы начать."
+            "<b>Профиль настроен.</b>\n\n"
+            "🎁 У тебя есть <b>одна бесплатная генерация</b> — нажми ниже "
+            "«📝 Создание» → «🎁 Сгенерить бесплатный пост». "
+            "Бот сделает один развёрнутый пост под твою нишу.\n\n"
+            "Остальные фичи — генерация по 3 варианта, доработки, голосовой "
+            "сторителлинг, анализ профиля, разбор чужих лент, упаковка "
+            "профиля — открываются по подписке."
         )
     else:
         await message.answer("Открой меню и начнём:")

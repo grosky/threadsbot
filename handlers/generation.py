@@ -4,6 +4,7 @@ from __future__ import annotations
 import html
 import logging
 import time as _time
+from typing import Optional
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
@@ -24,6 +25,7 @@ from config import DAILY_LIMIT, TRANSFORM_DAILY_LIMIT, TRANSFORM_WARNING_AT
 from database import (
     can_generate_today,
     can_transform_today,
+    can_use_free_trial,
     get_user,
     has_access,
     is_subscription_active,
@@ -48,6 +50,10 @@ class GenerateStates(StatesGroup):
     choosing_length = State()
     entering_topic = State()
     waiting_refine_feedback = State()
+
+
+class FreeTrialStates(StatesGroup):
+    entering_topic = State()
 
 
 # ---------- KEYBOARDS ----------
@@ -83,13 +89,20 @@ def topic_keyboard() -> InlineKeyboardMarkup:
 async def start_generation(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
 
-    access_ok, reason = await has_access(user_id)
-    if not access_ok:
+    sub_active = await is_subscription_active(user_id)
+    if not sub_active:
         await callback.answer()
-        await callback.message.answer(
-            "🔓 Бесплатная генерация уже использована.\n\n"
-            "Оформи подписку чтобы продолжить — /start → «💎 Оформить подписку»."
-        )
+        # Если free_trial ещё доступен — направляем на бесплатную кнопку
+        # вместо того чтобы тратить её скрытно через обычный flow.
+        if await can_use_free_trial(user_id):
+            await callback.message.answer(
+                "🔓 <b>Это по подписке.</b>\n\n"
+                "Но у тебя есть <b>одна бесплатная генерация</b> — вернись в "
+                "/menu → 📝 Создание → 🎁 «Сгенерить бесплатный пост».\n\n"
+                "Там бот сделает тебе один длинный пост под нишу."
+            )
+        else:
+            await _send_subscription_required(callback.message)
         return
 
     can_gen, used = await can_generate_today(user_id)
@@ -110,20 +123,172 @@ async def start_generation(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     await callback.answer()
-    trial_note = (
-        "\n\n<i>🎁 Это твоя бесплатная пробная генерация.</i>"
-        if reason == "free_trial" else ""
-    )
     await callback.message.answer(
         "🎯 <b>Создание поста</b>\n\n"
         "Сначала — выбери длину:\n"
         "— <b>Короткий</b> — 1 пост, ≤ 450 символов, режется в ленте\n"
         "— <b>Развёрнутый тред</b> — длинный пост со структурой\n\n"
-        "Бот сам подберёт <b>3 разных формата</b> и сделает по ним 3 варианта."
-        + trial_note,
+        "Бот сам подберёт <b>3 разных формата</b> и сделает по ним 3 варианта.",
         reply_markup=length_keyboard(),
     )
     await state.set_state(GenerateStates.choosing_length)
+
+
+# ---------- БЕСПЛАТНАЯ ГЕНЕРАЦИЯ (одна, без выбора длины, всегда длинный тред) ----------
+
+def _free_topic_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎲 Удиви меня", callback_data="free_topic:surprise")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="free_topic:cancel")],
+        ]
+    )
+
+
+@router.callback_query(F.data == "action:free_generate")
+async def start_free_generation(callback: CallbackQuery, state: FSMContext) -> None:
+    user_id = callback.from_user.id
+
+    # Защита: если подписка активна — это не для тебя, иди через обычный flow
+    if await is_subscription_active(user_id):
+        await callback.answer()
+        await callback.message.answer(
+            "У тебя активная подписка — пользуйся обычной «🎯 Сгенерить пост»."
+        )
+        return
+
+    # Защита: free trial уже использован
+    if not await can_use_free_trial(user_id):
+        await callback.answer()
+        await callback.message.answer(
+            "🔓 Бесплатная генерация уже использована.\n\n"
+            "Оформи подписку чтобы продолжить — там 4 поста в день, "
+            "доработки, голос, анализ и упаковка профиля."
+        )
+        await _send_subscription_required(callback.message)
+        return
+
+    user = await get_user(user_id)
+    if not user or not user.get("onboarding_complete"):
+        await callback.answer()
+        await callback.message.answer(
+            "Сначала нужно заполнить профиль. Запусти /start."
+        )
+        return
+
+    await callback.answer()
+    await callback.message.answer(
+        "🎁 <b>Твоя бесплатная генерация</b>\n\n"
+        "О чём писать первый пост? Напиши тему или сырую мысль:\n\n"
+        "<i>Тема:</i> «как набрать первую тысячу подписчиков»\n"
+        "<i>Сырая мысль:</i> «вчера в кафе подслушал как девушки обсуждали "
+        "что курсы все одинаковые»\n\n"
+        "Бот сделает один развёрнутый пост под твою нишу.\n"
+        "Или жми «🎲 Удиви меня» — подберёт тему сам.",
+        reply_markup=_free_topic_keyboard(),
+    )
+    await state.set_state(FreeTrialStates.entering_topic)
+
+
+@router.callback_query(FreeTrialStates.entering_topic, F.data == "free_topic:surprise")
+async def free_topic_surprise(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await _do_free_generate(callback.message, callback.from_user.id, None, state, bot)
+
+
+@router.callback_query(FreeTrialStates.entering_topic, F.data == "free_topic:cancel")
+async def free_topic_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer("Отменено")
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+
+@router.message(FreeTrialStates.entering_topic, F.text & ~F.text.startswith("/"))
+async def free_topic_entered(message: Message, state: FSMContext, bot: Bot) -> None:
+    topic = (message.text or "").strip()
+    await _do_free_generate(message, message.from_user.id, topic, state, bot)
+
+
+async def _do_free_generate(
+    message: Message,
+    user_id: int,
+    topic: str | None,
+    state: FSMContext,
+    bot: Bot,
+) -> None:
+    """Один длинный пост под нишу + сразу paywall. Без вариантов, без выбора длины."""
+    # Двойная проверка
+    if await is_subscription_active(user_id):
+        await message.answer("У тебя активная подписка — используй /menu → 🎯 Сгенерить пост.")
+        await state.clear()
+        return
+    if not await can_use_free_trial(user_id):
+        await message.answer("🔓 Бесплатная генерация уже использована.")
+        await _send_subscription_required(message)
+        await state.clear()
+        return
+
+    profile = await get_user(user_id)
+    if not profile:
+        await message.answer("Профиль не найден. Запусти /start.")
+        await state.clear()
+        return
+
+    status_msg = await message.answer("🧠 Думаю... ~15-20 секунд")
+
+    try:
+        variants = await generate_posts(profile, topic, length="long")
+    except Exception as e:
+        log.exception("Free generation failed for user %s", user_id)
+        await status_msg.edit_text(
+            "❌ Что-то пошло не так. Попробуй ещё раз через минуту.\n\n"
+            f"<code>{html.escape(type(e).__name__)}: {html.escape(str(e))[:200]}</code>"
+        )
+        await state.clear()
+        return
+
+    await log_generation(user_id, "auto_long", topic)
+    await status_msg.delete()
+
+    if not variants:
+        await message.answer("❌ Gemini вернул пустой ответ. Попробуй ещё раз через /menu.")
+        await state.clear()
+        return
+
+    # Показываем только первый из 3 вариантов — остальные «остаются за подпиской»
+    v = variants[0]
+    raw_post = str(v.get("post", ""))
+    safe_post = html.escape(raw_post)
+    technique = html.escape(str(v.get("angle_technique", "—")))
+    format_key = (v.get("format") or "").strip().lower()
+    fmt_info = FORMAT_DETAILS.get(format_key, {})
+    fmt_emoji = fmt_info.get("emoji", "🎯")
+    fmt_name = fmt_info.get("name", FORMAT_OPTIONS.get(format_key, format_key) or "—")
+
+    header = (
+        f"{fmt_emoji} <b>Твой пост</b> · {fmt_name}\n"
+        f"<i>Угол: {technique}</i>"
+    )
+    full_text = f"{header}\n\n{safe_post}"
+    if len(full_text) > 4000:
+        full_text = full_text[:4000] + "\n\n…(обрезано)"
+
+    # post_actions_keyboard в free режиме не имеем смысла — кнопки доработки требуют подписки.
+    # Поэтому показываем без них, отправляем сразу paywall ниже.
+    await message.answer(full_text)
+
+    # Стрик + ачивки
+    await touch_streak(user_id)
+    await check_and_award(user_id, bot, codes=GENERATION_RELATED + STREAK_RELATED)
+
+    # Помечаем trial использованным + paywall
+    await mark_free_trial_used(user_id)
+    await _send_paywall_after_trial(message)
+    await state.clear()
 
 
 @router.callback_query(GenerateStates.choosing_length, F.data.startswith("len:"))
@@ -295,33 +460,55 @@ async def _do_generate(
     await state.clear()
 
 
-async def _send_paywall_after_trial(message: Message) -> None:
-    """Показываем paywall после первой бесплатной генерации."""
+def _subscription_keyboard() -> Optional[InlineKeyboardMarkup]:
     from config import config as _cfg
-    rows = []
-    if _cfg.tribute_buy_button_enabled:
-        rows.append([InlineKeyboardButton(
+    if not _cfg.tribute_buy_button_enabled:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
             text="💎 Оформить подписку",
             url=_cfg.tribute_subscription_url,
-        )])
-    kb = InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+        )
+    ]])
 
+
+def _paywall_perks_text() -> str:
+    """Актуальный список фич которые открывает подписка."""
+    from config import config as _cfg
     perks = [
-        "✅ <b>4 генерации в день</b> в 5 форматах",
-        "✅ <b>Голосовой сторителлинг</b>",
-        "✅ Анализ профиля и чужих лент",
-        "✅ Доработка постов (жёстче / мягче / по фидбеку)",
+        "✅ <b>4 поста в день</b> — каждая генерация выдаёт 3 разных варианта формата",
+        "✅ <b>7 доработок в день</b> — жёстче / мягче / 🫶 очеловечить / по фидбеку",
+        "✅ <b>🎙 Голосовой сторителлинг</b> — наговариваешь идею, бот собирает живой пост",
+        "✅ <b>📸 Анализ упаковки твоего профиля</b> по скриншоту",
+        "✅ <b>🔍 Разбор чужих лент</b> — паттерны под твою нишу",
+        "✅ <b>🆕 Упаковка профиля с нуля</b> — имя, bio, ссылка, закреп",
+        "✅ <b>💡 10 идей под нишу</b> за один тап",
+        "✅ Все будущие фичи бесплатно",
     ]
     if _cfg.threads_publish_enabled:
-        perks.insert(2, "✅ <b>Авто-публикация в Threads</b>")
-    perks_text = "\n".join(perks)
+        perks.insert(0, "✅ <b>📤 Авто-публикация в Threads</b> в один тап")
+    return "\n".join(perks)
 
+
+async def _send_paywall_after_trial(message: Message) -> None:
+    """Показываем paywall после первой бесплатной генерации."""
     await message.answer(
         "🎉 <b>Это была твоя бесплатная генерация</b>\n\n"
-        "Понравилось? Оформи подписку и получи:\n\n"
-        f"{perks_text}\n\n"
-        "Можно отменить в любой момент.",
-        reply_markup=kb,
+        "Если зашло — открой остальное по подписке:\n\n"
+        f"{_paywall_perks_text()}\n\n"
+        "Подписка $5/мес. Отмена в любой момент через @tribute.",
+        reply_markup=_subscription_keyboard(),
+    )
+
+
+async def _send_subscription_required(message: Message) -> None:
+    """Paywall для юзеров без подписки и без free trial."""
+    await message.answer(
+        "💎 <b>Эта функция по подписке.</b>\n\n"
+        "Что внутри:\n\n"
+        f"{_paywall_perks_text()}\n\n"
+        "Подписка $5/мес. Отмена в любой момент через @tribute.",
+        reply_markup=_subscription_keyboard(),
     )
 
 

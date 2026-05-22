@@ -97,13 +97,20 @@ def _final_kb() -> InlineKeyboardMarkup:
 async def start_packaging(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
 
-    access_ok, _reason = await has_access(user_id)
-    if not access_ok:
+    from database import is_subscription_active, can_use_free_trial
+    if not await is_subscription_active(user_id):
         await callback.answer()
-        await callback.message.answer(
-            "🔓 Упаковка профиля доступна по подписке.\n\n"
-            "Оформи подписку — /start → «💎 Оформить подписку»."
-        )
+        if await can_use_free_trial(user_id):
+            await callback.message.answer(
+                "🔓 <b>Упаковка профиля доступна по подписке.</b>\n\n"
+                "Но у тебя есть <b>одна бесплатная генерация</b> — вернись в "
+                "/menu → 📝 Создание → 🎁 «Сгенерить бесплатный пост»."
+            )
+        else:
+            await callback.message.answer(
+                "🔓 Упаковка профиля доступна по подписке.\n\n"
+                "Оформи подписку — /start → «💎 Оформить подписку»."
+            )
         return
 
     user = await get_user(user_id)

@@ -15,6 +15,7 @@ from aiogram.types import (
 
 from config import DAILY_LIMIT, config
 from database import (
+    can_use_free_trial,
     count_today_generations,
     get_streak,
     get_threads_account,
@@ -37,13 +38,19 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def create_menu_keyboard() -> InlineKeyboardMarkup:
-    rows = [
+def create_menu_keyboard(has_free_trial: bool = False) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if has_free_trial:
+        rows.append([InlineKeyboardButton(
+            text="🎁 Сгенерить бесплатный пост (1 раз)",
+            callback_data="action:free_generate",
+        )])
+    rows.extend([
         [InlineKeyboardButton(text="🎯 Сгенерить пост", callback_data="action:generate")],
         [InlineKeyboardButton(text="💡 Идеи для постов", callback_data="action:ideas")],
         [InlineKeyboardButton(text="🎙 Голосовой сторителлинг", callback_data="action:storytelling")],
         [InlineKeyboardButton(text="🆕 Упаковать профиль", callback_data="action:pack_profile")],
-    ]
+    ])
     # «Свой пост» = только для публикации в Threads. Прячем до App Review.
     if config.threads_publish_enabled:
         rows.append([InlineKeyboardButton(
@@ -163,21 +170,33 @@ async def go_main(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "menu:create")
 async def go_create(callback: CallbackQuery) -> None:
     await callback.answer()
-    lines = [
-        "📝 <b>Создание постов</b>",
-        "",
+    user_id = callback.from_user.id
+    has_free_trial = (
+        not await is_subscription_active(user_id)
+        and await can_use_free_trial(user_id)
+    )
+
+    lines = ["📝 <b>Создание постов</b>", ""]
+    if has_free_trial:
+        lines.append(
+            "🎁 <b>Бесплатная генерация</b> — один длинный пост под твою нишу, "
+            "без подписки. После этого — paywall."
+        )
+        lines.append("")
+    lines.extend([
         "🎯 <b>Сгенерить</b> — 3 варианта поста по теме",
-        "💡 <b>Идеи</b> — бот предложит 10 идей под твою нишу",
+        "💡 <b>Идеи</b> — 10 идей под твою нишу",
         "🎙 <b>Голосом</b> — наговариваешь идею, бот собирает сторителлинг",
-        "🆕 <b>Упаковать профиль</b> — имя, bio, ссылка, закреп — с нуля под твою нишу",
-    ]
+        "🆕 <b>Упаковать профиль</b> — имя, bio, ссылка, закреп",
+    ])
     if config.threads_publish_enabled:
         lines.append("✍️ <b>Свой пост</b> — пишешь руками, бот публикует в Threads")
     text = "\n".join(lines)
+    kb = create_menu_keyboard(has_free_trial=has_free_trial)
     try:
-        await callback.message.edit_text(text, reply_markup=create_menu_keyboard())
+        await callback.message.edit_text(text, reply_markup=kb)
     except Exception:
-        await callback.message.answer(text, reply_markup=create_menu_keyboard())
+        await callback.message.answer(text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "menu:analytics")

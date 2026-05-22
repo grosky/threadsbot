@@ -45,12 +45,19 @@ class StorytellingStates(StatesGroup):
 async def start_storytelling(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
 
-    access_ok, _ = await has_access(user_id)
-    if not access_ok:
+    if not await is_subscription_active(user_id):
         await callback.answer()
-        await callback.message.answer(
-            "🔓 Бесплатная генерация уже использована. /start → «💎 Оформить подписку»."
-        )
+        from database import can_use_free_trial as _can_trial
+        if await _can_trial(user_id):
+            await callback.message.answer(
+                "🔓 <b>Голосовой сторителлинг доступен по подписке.</b>\n\n"
+                "Но у тебя есть <b>одна бесплатная генерация</b> — вернись в "
+                "/menu → 📝 Создание → 🎁 «Сгенерить бесплатный пост»."
+            )
+        else:
+            await callback.message.answer(
+                "🔓 Голосовой сторителлинг доступен по подписке. Оформи через /start."
+            )
         return
 
     can_gen, used = await can_generate_today(user_id)
