@@ -21,7 +21,7 @@ from achievements import (
     STREAK_RELATED,
     check_and_award,
 )
-from config import DAILY_LIMIT, TRANSFORM_DAILY_LIMIT, TRANSFORM_WARNING_AT
+from config import DAILY_LIMIT
 from database import (
     can_generate_today,
     can_transform_today,
@@ -477,7 +477,7 @@ def _paywall_perks_text() -> str:
     from config import config as _cfg
     perks = [
         "✅ <b>4 поста в день</b> — каждая генерация выдаёт 3 разных варианта формата",
-        "✅ <b>7 доработок в день</b> — жёстче / мягче / 🫶 очеловечить / по фидбеку",
+        "✅ <b>Доработка постов</b> — жёстче / мягче / 🫶 очеловечить / по фидбеку",
         "✅ <b>🎙 Голосовой сторителлинг</b> — наговариваешь идею, бот собирает живой пост",
         "✅ <b>📸 Анализ упаковки твоего профиля</b> по скриншоту",
         "✅ <b>🔍 Разбор чужих лент</b> — паттерны под твою нишу",
@@ -518,20 +518,10 @@ def _admin_id() -> int:
 
 
 def _transform_warning_suffix(used_after: int) -> str:
-    """Возвращает приписку про оставшиеся доработки если приблизились к лимиту.
-
-    used_after — сколько transform'ов уже сделано после текущего.
-    """
-    if used_after < TRANSFORM_WARNING_AT:
-        return ""
-    remaining = max(0, TRANSFORM_DAILY_LIMIT - used_after)
-    if remaining == 0:
-        return ""  # лимит уже исчерпан, отдельного предупреждения не нужно
-    word = "доработка" if remaining == 1 else "доработки" if remaining < 5 else "доработок"
-    return (
-        f"\n\n<i>⚠️ Осталось <b>{remaining}</b> {word} на сегодня. "
-        f"Лимит сбросится в 00:00 UTC.</i>"
-    )
+    """Раньше показывали «осталось N доработок». Теперь не показываем — юзер
+    просто упрётся в потолок если переборщит. Конкретные цифры лимита намеренно
+    нигде не светим."""
+    return ""
 
 
 # ---------- ПОСТ-АКТИВЫ: ЖЁСТЧЕ / МЯГЧЕ / ОЧЕЛОВЕЧИТЬ ----------
@@ -567,8 +557,8 @@ async def make_humanize(callback: CallbackQuery, bot: Bot) -> None:
     can_tr, _ = await can_transform_today(user_id)
     if not can_tr:
         await callback.answer(
-            f"Лимит доработок исчерпан ({TRANSFORM_DAILY_LIMIT}/{TRANSFORM_DAILY_LIMIT}). "
-            f"Сбросится в 00:00 UTC.",
+            "Лимит доработок на сегодня исчерпан. Возвращайся завтра — "
+            "сбрасывается в 00:00 UTC.",
             show_alert=True,
         )
         return
@@ -632,8 +622,8 @@ async def _transform(callback: CallbackQuery, bot: Bot, instruction: str) -> Non
     can_tr, _ = await can_transform_today(user_id)
     if not can_tr:
         await callback.answer(
-            f"Лимит доработок исчерпан ({TRANSFORM_DAILY_LIMIT}/{TRANSFORM_DAILY_LIMIT}). "
-            f"Сбросится в 00:00 UTC.",
+            "Лимит доработок на сегодня исчерпан. Возвращайся завтра — "
+            "сбрасывается в 00:00 UTC.",
             show_alert=True,
         )
         return
@@ -729,9 +719,8 @@ async def apply_refine(message: Message, state: FSMContext, bot: Bot) -> None:
     can_tr, _ = await can_transform_today(user_id)
     if not can_tr:
         await message.answer(
-            f"⏳ Лимит доработок исчерпан "
-            f"({TRANSFORM_DAILY_LIMIT}/{TRANSFORM_DAILY_LIMIT}). "
-            f"Сбросится в 00:00 UTC."
+            "⏳ Лимит доработок на сегодня исчерпан. "
+            "Возвращайся завтра — сбрасывается в 00:00 UTC."
         )
         return
 
