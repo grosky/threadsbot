@@ -102,7 +102,7 @@ async def start_generation(callback: CallbackQuery, state: FSMContext) -> None:
                 "Там бот сделает тебе один длинный пост под нишу."
             )
         else:
-            await _send_subscription_required(callback.message)
+            await send_subscription_required(callback.message, "Генерация постов")
         return
 
     can_gen, used = await can_generate_today(user_id)
@@ -160,12 +160,7 @@ async def start_free_generation(callback: CallbackQuery, state: FSMContext) -> N
     # Защита: free trial уже использован
     if not await can_use_free_trial(user_id):
         await callback.answer()
-        await callback.message.answer(
-            "🔓 Бесплатная генерация уже использована.\n\n"
-            "Оформи подписку чтобы продолжить — там 4 поста в день, "
-            "доработки, голос, анализ и упаковка профиля."
-        )
-        await _send_subscription_required(callback.message)
+        await send_subscription_required(callback.message, "Генерация постов")
         return
 
     user = await get_user(user_id)
@@ -227,8 +222,7 @@ async def _do_free_generate(
         await state.clear()
         return
     if not await can_use_free_trial(user_id):
-        await message.answer("🔓 Бесплатная генерация уже использована.")
-        await _send_subscription_required(message)
+        await send_subscription_required(message, "Генерация постов")
         await state.clear()
         return
 
@@ -501,15 +495,29 @@ async def _send_paywall_after_trial(message: Message) -> None:
     )
 
 
-async def _send_subscription_required(message: Message) -> None:
-    """Paywall для юзеров без подписки и без free trial."""
-    await message.answer(
-        "💎 <b>Эта функция по подписке.</b>\n\n"
-        "Что внутри:\n\n"
-        f"{_paywall_perks_text()}\n\n"
-        "Подписка $5/мес. Отмена в любой момент через @tribute.",
-        reply_markup=_subscription_keyboard(),
-    )
+async def send_subscription_required(
+    message: Message, feature_label: str = ""
+) -> None:
+    """Короткий paywall: «функция по подписке» + кнопка.
+
+    feature_label — название конкретной фичи («Идеи для постов» и т.п.).
+    Если пусто — общий текст.
+    """
+    if feature_label:
+        text = (
+            f"💎 <b>«{feature_label}» доступна только по подписке.</b>\n\n"
+            "Жми кнопку ниже, чтобы оформить."
+        )
+    else:
+        text = (
+            "💎 <b>Эта функция доступна только по подписке.</b>\n\n"
+            "Жми кнопку ниже, чтобы оформить."
+        )
+    await message.answer(text, reply_markup=_subscription_keyboard())
+
+
+# Алиас для обратной совместимости внутри модуля
+_send_subscription_required = send_subscription_required
 
 
 def _admin_id() -> int:

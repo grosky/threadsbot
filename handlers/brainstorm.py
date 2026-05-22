@@ -41,16 +41,15 @@ async def start_ideas(callback: CallbackQuery, state: FSMContext) -> None:
     if not await is_subscription_active(user_id):
         await callback.answer()
         from database import can_use_free_trial as _can_trial
+        from .generation import send_subscription_required
         if await _can_trial(user_id):
             await callback.message.answer(
-                "🔓 <b>Идеи доступны по подписке.</b>\n\n"
+                "🔓 <b>«Идеи для постов» доступны только по подписке.</b>\n\n"
                 "Но у тебя есть <b>одна бесплатная генерация</b> — вернись в "
                 "/menu → 📝 Создание → 🎁 «Сгенерить бесплатный пост»."
             )
         else:
-            await callback.message.answer(
-                "🔓 Идеи доступны по подписке. Оформи через /start."
-            )
+            await send_subscription_required(callback.message, "Идеи для постов")
         return
 
     user = await get_user(user_id)
@@ -138,10 +137,9 @@ async def use_idea(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     if not await is_subscription_active(user_id):
+        from .generation import send_subscription_required
         await callback.answer()
-        await callback.message.answer(
-            "🔓 Развитие идей доступно по подписке. Оформи через /start."
-        )
+        await send_subscription_required(callback.message, "Развитие идей в посты")
         return
 
     can_gen, _ = await can_generate_today(user_id)

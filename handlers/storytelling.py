@@ -48,16 +48,15 @@ async def start_storytelling(callback: CallbackQuery, state: FSMContext) -> None
     if not await is_subscription_active(user_id):
         await callback.answer()
         from database import can_use_free_trial as _can_trial
+        from .generation import send_subscription_required
         if await _can_trial(user_id):
             await callback.message.answer(
-                "🔓 <b>Голосовой сторителлинг доступен по подписке.</b>\n\n"
+                "🔓 <b>«Голосовой сторителлинг» доступен только по подписке.</b>\n\n"
                 "Но у тебя есть <b>одна бесплатная генерация</b> — вернись в "
                 "/menu → 📝 Создание → 🎁 «Сгенерить бесплатный пост»."
             )
         else:
-            await callback.message.answer(
-                "🔓 Голосовой сторителлинг доступен по подписке. Оформи через /start."
-            )
+            await send_subscription_required(callback.message, "Голосовой сторителлинг")
         return
 
     can_gen, used = await can_generate_today(user_id)

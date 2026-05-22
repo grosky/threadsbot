@@ -51,10 +51,17 @@ async def start_feed_analysis(callback: CallbackQuery, state: FSMContext) -> Non
     user_id = callback.from_user.id
 
     if not await is_subscription_active(user_id):
+        from database import can_use_free_trial as _can_trial
+        from .generation import send_subscription_required
         await callback.answer()
-        await callback.message.answer(
-            "❌ Подписка неактивна. Оформи подписку через /start."
-        )
+        if await _can_trial(user_id):
+            await callback.message.answer(
+                "🔓 <b>«Разбор чужих лент» доступен только по подписке.</b>\n\n"
+                "Но у тебя есть <b>одна бесплатная генерация</b> — вернись в "
+                "/menu → 📝 Создание → 🎁 «Сгенерить бесплатный пост»."
+            )
+        else:
+            await send_subscription_required(callback.message, "Разбор чужих лент")
         return
 
     user = await get_user(user_id)

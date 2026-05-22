@@ -100,17 +100,15 @@ async def start_packaging(callback: CallbackQuery, state: FSMContext) -> None:
     from database import is_subscription_active, can_use_free_trial
     if not await is_subscription_active(user_id):
         await callback.answer()
+        from .generation import send_subscription_required
         if await can_use_free_trial(user_id):
             await callback.message.answer(
-                "🔓 <b>Упаковка профиля доступна по подписке.</b>\n\n"
+                "🔓 <b>«Упаковка профиля» доступна только по подписке.</b>\n\n"
                 "Но у тебя есть <b>одна бесплатная генерация</b> — вернись в "
                 "/menu → 📝 Создание → 🎁 «Сгенерить бесплатный пост»."
             )
         else:
-            await callback.message.answer(
-                "🔓 Упаковка профиля доступна по подписке.\n\n"
-                "Оформи подписку — /start → «💎 Оформить подписку»."
-            )
+            await send_subscription_required(callback.message, "Упаковка профиля")
         return
 
     user = await get_user(user_id)
