@@ -232,6 +232,18 @@ async def go_settings(callback: CallbackQuery) -> None:
         await callback.message.answer(text, reply_markup=settings_menu_keyboard())
 
 
+def _profile_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text="✏️ Заполнить заново",
+                callback_data="action:edit_profile",
+            )],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:settings")],
+        ]
+    )
+
+
 @router.callback_query(F.data == "action:profile")
 async def show_profile(callback: CallbackQuery) -> None:
     user = await get_user(callback.from_user.id)
@@ -249,10 +261,24 @@ async def show_profile(callback: CallbackQuery) -> None:
         f"<b>Личные факты:</b> {user.get('facts') or '—'}\n"
         f"<b>Боли ЦА:</b> {user.get('pains') or '—'}\n"
         f"<b>Social proof:</b> {user.get('social_proof') or '—'}\n\n"
-        "<i>Чтобы изменить профиль — пройди /start заново.</i>"
+        "<i>Чтобы изменить — жми «Заполнить заново».</i>"
     )
     await callback.answer()
-    await callback.message.answer(text)
+    await callback.message.answer(text, reply_markup=_profile_keyboard())
+
+
+@router.callback_query(F.data == "action:edit_profile")
+async def edit_profile(callback: CallbackQuery, state: FSMContext) -> None:
+    """Запускает онбординг заново — перезаписать все поля профиля."""
+    from .onboarding import start_onboarding
+    await callback.answer()
+    await state.clear()
+    await callback.message.answer(
+        "✏️ <b>Заполним профиль заново.</b>\n\n"
+        "Все ответы перезапишутся. Подписка и история постов сохраняются — "
+        "меняется только профайл который бот учитывает при генерации."
+    )
+    await start_onboarding(callback.message, state)
 
 
 @router.callback_query(F.data == "action:subscription")
