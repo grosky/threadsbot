@@ -20,9 +20,10 @@ from achievements import (
     STREAK_RELATED,
     check_and_award,
 )
-from config import DAILY_LIMIT
+from config import DAILY_LIMIT, TRANSFORM_DAILY_LIMIT, TRANSFORM_WARNING_AT
 from database import (
     can_generate_today,
+    can_transform_today,
     get_user,
     has_access,
     is_subscription_active,
@@ -329,6 +330,23 @@ def _admin_id() -> int:
     return config.admin_telegram_id
 
 
+def _transform_warning_suffix(used_after: int) -> str:
+    """Возвращает приписку про оставшиеся доработки если приблизились к лимиту.
+
+    used_after — сколько transform'ов уже сделано после текущего.
+    """
+    if used_after < TRANSFORM_WARNING_AT:
+        return ""
+    remaining = max(0, TRANSFORM_DAILY_LIMIT - used_after)
+    if remaining == 0:
+        return ""  # лимит уже исчерпан, отдельного предупреждения не нужно
+    word = "доработка" if remaining == 1 else "доработки" if remaining < 5 else "доработок"
+    return (
+        f"\n\n<i>⚠️ Осталось <b>{remaining}</b> {word} на сегодня. "
+        f"Лимит сбросится в 00:00 UTC.</i>"
+    )
+
+
 # ---------- ПОСТ-АКТИВЫ: ЖЁСТЧЕ / МЯГЧЕ / ОЧЕЛОВЕЧИТЬ ----------
 
 @router.callback_query(F.data.startswith("post:harder:"))
@@ -359,9 +377,13 @@ async def make_humanize(callback: CallbackQuery, bot: Bot) -> None:
         await callback.answer("Подписка неактивна", show_alert=True)
         return
 
-    can_gen, _ = await can_generate_today(user_id)
-    if not can_gen:
-        await callback.answer("Дневной лимит исчерпан", show_alert=True)
+    can_tr, _ = await can_transform_today(user_id)
+    if not can_tr:
+        await callback.answer(
+            f"Лимит доработок исчерпан ({TRANSFORM_DAILY_LIMIT}/{TRANSFORM_DAILY_LIMIT}). "
+            f"Сбросится в 00:00 UTC.",
+            show_alert=True,
+        )
         return
 
     profile = await get_user(user_id)
@@ -393,13 +415,16 @@ async def make_humanize(callback: CallbackQuery, bot: Bot) -> None:
     new_key = f"h{int(_time.time())}"
     await remember_post(user_id, new_key, new_post)
 
+    _, used_after = await can_transform_today(user_id)
+    warn = _transform_warning_suffix(used_after)
+
     safe_post = html.escape(new_post)
     header = f"🫶 <b>Очеловечено</b>\n<i>{html.escape(summary)}</i>\n\n"
     full = header + safe_post
     if len(full) > 4000:
         full = header + safe_post[:3700] + "\n…(обрезано)"
     await callback.message.answer(
-        full,
+        full + warn,
         reply_markup=post_actions_keyboard(new_key),
     )
 
@@ -417,9 +442,13 @@ async def _transform(callback: CallbackQuery, bot: Bot, instruction: str) -> Non
         await callback.answer("Подписка неактивна", show_alert=True)
         return
 
-    can_gen, _ = await can_generate_today(user_id)
-    if not can_gen:
-        await callback.answer("Дневной лимит исчерпан", show_alert=True)
+    can_tr, _ = await can_transform_today(user_id)
+    if not can_tr:
+        await callback.answer(
+            f"Лимит доработок исчерпан ({TRANSFORM_DAILY_LIMIT}/{TRANSFORM_DAILY_LIMIT}). "
+            f"Сбросится в 00:00 UTC.",
+            show_alert=True,
+        )
         return
 
     profile = await get_user(user_id)
@@ -449,11 +478,17 @@ async def _transform(callback: CallbackQuery, bot: Bot, instruction: str) -> Non
     new_key = f"t{int(_time.time())}"
     await remember_post(user_id, new_key, new_post)
 
+    _, used_after = await can_transform_today(user_id)
+    warn = _transform_warning_suffix(used_after)
+
     safe_post = html.escape(new_post)
-    await callback.message.answer(
+    body = (
         f"🔄 <b>Переписано</b>\n<i>{html.escape(summary)}</i>\n\n{safe_post}"
         if len(safe_post) < 3500
-        else f"🔄 <b>Переписано</b>\n\n{safe_post[:3700]}",
+        else f"🔄 <b>Переписано</b>\n\n{safe_post[:3700]}"
+    )
+    await callback.message.answer(
+        body + warn,
         reply_markup=post_actions_keyboard(new_key),
     )
 
@@ -504,9 +539,13 @@ async def apply_refine(message: Message, state: FSMContext, bot: Bot) -> None:
         await message.answer("❌ Подписка неактивна.")
         return
 
-    can_gen, _ = await can_generate_today(user_id)
-    if not can_gen:
-        await message.answer("⏳ Лимит исчерпан.")
+    can_tr, _ = await can_transform_today(user_id)
+    if not can_tr:
+        await message.answer(
+            f"⏳ Лимит доработок исчерпан "
+            f"({TRANSFORM_DAILY_LIMIT}/{TRANSFORM_DAILY_LIMIT}). "
+            f"Сбросится в 00:00 UTC."
+        )
         return
 
     profile = await get_user(user_id)
@@ -534,9 +573,12 @@ async def apply_refine(message: Message, state: FSMContext, bot: Bot) -> None:
     new_key = f"r{int(_time.time())}"
     await remember_post(user_id, new_key, new_post)
 
+    _, used_after = await can_transform_today(user_id)
+    warn = _transform_warning_suffix(used_after)
+
     safe_post = html.escape(new_post)
     text = f"✏️ <b>Доработано</b>\n<i>{html.escape(summary)}</i>\n\n{safe_post}"
     if len(text) > 4000:
         text = text[:4000] + "\n…(обрезано)"
 
-    await message.answer(text, reply_markup=post_actions_keyboard(new_key))
+    await message.answer(text + warn, reply_markup=post_actions_keyboard(new_key))

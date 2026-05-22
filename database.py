@@ -522,13 +522,37 @@ async def activate_promocode(code: str, telegram_id: int) -> tuple[bool, str]:
 
 # ---------- GENERATIONS / LIMITS ----------
 
+# format'ы которые считаются «доработками», а не «новыми генерациями»
+# (не списывают основной DAILY_LIMIT, имеют собственный TRANSFORM_DAILY_LIMIT)
+TRANSFORM_KINDS = ("transform", "refine", "humanize")
+
+
 async def count_today_generations(telegram_id: int) -> int:
-    """Считает генерации за сегодня (UTC). Reset в 00:00 UTC."""
+    """Считает «новые» генерации за сегодня (UTC). Reset в 00:00 UTC.
+
+    Доработки (TRANSFORM_KINDS) НЕ учитываются — у них свой лимит.
+    """
+    placeholders = ",".join("?" for _ in TRANSFORM_KINDS)
     async with aiosqlite.connect(config.database_path) as db:
         async with db.execute(
-            "SELECT COUNT(*) FROM generations "
-            "WHERE user_id = ? AND date(created_at) = date('now')",
-            (telegram_id,),
+            f"SELECT COUNT(*) FROM generations "
+            f"WHERE user_id = ? AND date(created_at) = date('now') "
+            f"  AND format NOT IN ({placeholders})",
+            (telegram_id, *TRANSFORM_KINDS),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
+
+async def count_today_transforms(telegram_id: int) -> int:
+    """Сколько доработок (жёстче/мягче/refine/humanize) юзер сделал сегодня."""
+    placeholders = ",".join("?" for _ in TRANSFORM_KINDS)
+    async with aiosqlite.connect(config.database_path) as db:
+        async with db.execute(
+            f"SELECT COUNT(*) FROM generations "
+            f"WHERE user_id = ? AND date(created_at) = date('now') "
+            f"  AND format IN ({placeholders})",
+            (telegram_id, *TRANSFORM_KINDS),
         ) as cur:
             row = await cur.fetchone()
             return row[0] if row else 0
@@ -544,6 +568,15 @@ async def can_generate_today(telegram_id: int) -> tuple[bool, int]:
     if _is_admin(telegram_id):
         return True, used
     return used < DAILY_LIMIT, used
+
+
+async def can_transform_today(telegram_id: int) -> tuple[bool, int]:
+    """Возвращает (can_transform, used_transforms_today). Админ — безлимит."""
+    from config import TRANSFORM_DAILY_LIMIT
+    used = await count_today_transforms(telegram_id)
+    if _is_admin(telegram_id):
+        return True, used
+    return used < TRANSFORM_DAILY_LIMIT, used
 
 
 async def log_generation(

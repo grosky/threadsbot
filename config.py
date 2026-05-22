@@ -98,5 +98,11 @@ class Config:
 
 config = Config.from_env()
 
-# Дневной лимит генераций на одного юзера
+# Дневной лимит «новых» генераций (auto/short/long/storytelling/ideas/humanize)
 DAILY_LIMIT = 4
+
+# Дневной лимит доработок (жёстче/мягче/refine) — отдельный счётчик,
+# не списывает из основного. После TRANSFORM_WARNING_AT покажем юзеру
+# «осталось N доработок».
+TRANSFORM_DAILY_LIMIT = 7
+TRANSFORM_WARNING_AT = 5
