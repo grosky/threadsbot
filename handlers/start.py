@@ -25,6 +25,7 @@ from achievements import REFERRAL_RELATED, check_and_award
 from config import config
 from database import (
     activate_promocode,
+    assign_ab_variant,
     can_use_free_trial,
     cancel_followups,
     consume_referral_reward,
@@ -154,7 +155,21 @@ PAYWALL_TEXT = (
 )
 
 
-async def _show_welcome(message: Message, user_id: int) -> None:
+async def _show_welcome(message: Message, user_id: int, ab_variant: str = "A") -> None:
+    # Вариант B (A/B тест без free trial): welcome без кнопки «Попробовать
+    # бесплатно», только «Оформить подписку». Текст тот же продающий,
+    # с картинкой-кейсом.
+    if ab_variant == "B":
+        text = _build_welcome_text()
+        kb = welcome_keyboard(show_trial=False)
+        if WELCOME_PROOF_IMAGE.exists():
+            try:
+                await message.answer_photo(FSInputFile(WELCOME_PROOF_IMAGE))
+            except Exception:
+                log.exception("Failed to send welcome proof image — fallback to text only")
+        await message.answer(text, reply_markup=kb)
+        return
+
     trial_ok = await can_use_free_trial(user_id)
     if trial_ok:
         text = _build_welcome_text()
@@ -194,6 +209,11 @@ async def handle_start(
 
     await create_user(user_tg.id, user_tg.username, user_tg.first_name or "")
 
+    # A/B тест: назначаем вариант новому юзеру (для существующих ничего не меняет).
+    # B автоматически помечается free_trial_used=1 внутри assign_ab_variant,
+    # поэтому вся существующая логика гейтинга работает.
+    ab_variant = await assign_ab_variant(user_tg.id)
+
     referrer_id, source = _parse_referrer_payload(command.args)
     if referrer_id:
         linked = await set_referrer_if_new(user_tg.id, referrer_id, source)
@@ -223,7 +243,7 @@ async def handle_start(
     # через 15м / 1ч / 3ч). Если уже запускалась — не трогаем, чтоб не зациклить.
     if user and user.get("followup_start_at") is None:
         await start_followup_timer(user_tg.id)
-    await _show_welcome(message, user_tg.id)
+    await _show_welcome(message, user_tg.id, ab_variant=ab_variant)
 
 
 # ---------- WELCOME CALLBACKS ----------

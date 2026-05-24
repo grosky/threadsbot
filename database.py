@@ -204,6 +204,11 @@ async def _migrate_users_columns(db: aiosqlite.Connection) -> None:
         await db.execute(
             "ALTER TABLE users ADD COLUMN profile_pack_json TEXT"
         )
+    if "ab_variant" not in cols:
+        # A/B тест: 'A' = с free trial (текущая модель),
+        # 'B' = без free trial (welcome → сразу paywall).
+        # NULL = legacy юзеры до запуска теста, считаются как 'A'.
+        await db.execute("ALTER TABLE users ADD COLUMN ab_variant TEXT")
     if "followup_start_at" not in cols:
         await db.execute(
             "ALTER TABLE users ADD COLUMN followup_start_at TIMESTAMP"
@@ -312,6 +317,77 @@ async def update_profile_pack_block(
     current = await get_profile_pack(telegram_id) or {}
     current[block_key] = value
     await save_profile_pack(telegram_id, current)
+
+
+# ---------- A/B ТЕСТ (с free trial vs без) ----------
+
+async def assign_ab_variant(telegram_id: int) -> str:
+    """Назначает A/B вариант новому юзеру.
+
+    Если ab_variant уже выставлен — возвращает текущий.
+    Если NULL — рандомит 50/50 и сохраняет. Для варианта B сразу помечает
+    free_trial_used=1, чтобы вся существующая логика free trial его не пускала.
+
+    Возвращает финальный вариант: 'A' или 'B'.
+    """
+    user = await get_user(telegram_id)
+    if user and user.get("ab_variant") in ("A", "B"):
+        return user["ab_variant"]
+
+    variant = secrets.choice(("A", "B"))
+    async with aiosqlite.connect(config.database_path) as db:
+        if variant == "B":
+            await db.execute(
+                "UPDATE users SET ab_variant = ?, free_trial_used = 1 "
+                "WHERE telegram_id = ?",
+                (variant, telegram_id),
+            )
+        else:
+            await db.execute(
+                "UPDATE users SET ab_variant = ? WHERE telegram_id = ?",
+                (variant, telegram_id),
+            )
+        await db.commit()
+    return variant
+
+
+async def get_ab_metrics() -> dict:
+    """Сводка по A/B тесту. Возвращает {A: {...}, B: {...}}.
+
+    Для каждой ветки: total, onboarded, paid_now, conversion (%).
+    Legacy юзеры (ab_variant NULL) считаются как A.
+    """
+    async with aiosqlite.connect(config.database_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT "
+            "  COALESCE(ab_variant, 'A') AS variant, "
+            "  COUNT(*) AS total, "
+            "  SUM(CASE WHEN onboarding_complete = 1 THEN 1 ELSE 0 END) AS onboarded, "
+            "  SUM(CASE WHEN subscription_expires_at IS NOT NULL "
+            "           AND subscription_expires_at > datetime('now') "
+            "           THEN 1 ELSE 0 END) AS paid_now "
+            "FROM users "
+            "GROUP BY COALESCE(ab_variant, 'A')",
+        ) as cur:
+            rows = await cur.fetchall()
+
+    out: dict = {"A": {}, "B": {}}
+    for row in rows:
+        variant = row["variant"]
+        total = row["total"] or 0
+        paid = row["paid_now"] or 0
+        out[variant] = {
+            "total": total,
+            "onboarded": row["onboarded"] or 0,
+            "paid_now": paid,
+            "conversion": (paid / total * 100) if total else 0.0,
+        }
+    # Гарантируем что обе ветки в словаре есть, даже если 0 юзеров
+    for v in ("A", "B"):
+        if not out[v]:
+            out[v] = {"total": 0, "onboarded": 0, "paid_now": 0, "conversion": 0.0}
+    return out
 
 
 # ---------- FOLLOWUP DRIP (3 сообщения после /start если не оплатил) ----------

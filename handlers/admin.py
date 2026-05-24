@@ -14,6 +14,7 @@ from database import (
     add_partner_link,
     find_partner_by_source,
     find_user_by_username,
+    get_ab_metrics,
     get_admin_overview,
     get_user,
 )
@@ -81,6 +82,32 @@ async def cmd_admin(message: Message) -> None:
         "<b>Threads</b>",
         f"Подключённых аккаунтов: <b>{stats['threads_connected']}</b>",
     ]
+
+    # A/B тест блок
+    ab = await get_ab_metrics()
+    a = ab["A"]
+    b = ab["B"]
+    if (a["total"] + b["total"]) > 0:
+        lines.extend([
+            "",
+            "🧪 <b>A/B тест (free vs без free)</b>",
+            f"Вариант A (с free): <b>{a['total']}</b> юзеров · "
+            f"платных <b>{a['paid_now']}</b> · "
+            f"конверсия <b>{a['conversion']:.1f}%</b>",
+            f"Вариант B (без free): <b>{b['total']}</b> юзеров · "
+            f"платных <b>{b['paid_now']}</b> · "
+            f"конверсия <b>{b['conversion']:.1f}%</b>",
+        ])
+        # Подсказка про статзначимость
+        min_sample = min(a["total"], b["total"])
+        if min_sample < 50:
+            lines.append(
+                f"<i>Выборка ещё мала ({min_sample} в меньшей ветке). "
+                f"Нужно 100+ в каждой для решения.</i>"
+            )
+        elif a["conversion"] != b["conversion"]:
+            winner = "A" if a["conversion"] > b["conversion"] else "B"
+            lines.append(f"<i>Пока лидирует: <b>{winner}</b></i>")
 
     await message.answer("\n".join(lines))
 
