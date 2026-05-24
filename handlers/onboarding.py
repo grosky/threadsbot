@@ -7,7 +7,6 @@ Q4: куда вести трафик (product_link)
 Q5 (опционально): результаты / social proof
 """
 from aiogram import F, Router
-from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -33,8 +32,6 @@ class OnboardingStates(StatesGroup):
     niche = State()
     audience = State()
     tone = State()
-    product_link = State()
-    social_proof = State()
     offer_packaging = State()
 
 
@@ -62,7 +59,7 @@ def tone_keyboard() -> InlineKeyboardMarkup:
 async def start_onboarding(message: Message, state: FSMContext) -> None:
     """Запускает онбординг. Вызывается из start.py."""
     await message.answer(
-        "<b>Вопрос 1 из 4</b>\n\n"
+        "<b>Вопрос 1 из 3</b>\n\n"
         "Расскажи коротко чем занимаешься.\n\n"
         "Например:\n"
         "— продаю курс по маркетингу для предпринимателей\n"
@@ -86,7 +83,7 @@ async def on_niche(message: Message, state: FSMContext) -> None:
     await update_profile_field(user_id, "product", text)
 
     await message.answer(
-        "<b>Вопрос 2 из 4</b>\n\n"
+        "<b>Вопрос 2 из 3</b>\n\n"
         "Для кого пишешь? Кто эти люди и что у них болит.\n\n"
         "Например:\n"
         "— фрилансеры 25-35, устали от нестабильности и боятся "
@@ -110,14 +107,14 @@ async def on_audience(message: Message, state: FSMContext) -> None:
     await update_profile_field(user_id, "pains", text)
 
     await message.answer(
-        "<b>Вопрос 3 из 4</b>\n\n"
+        "<b>Вопрос 3 из 3</b>\n\n"
         "Каким голосом писать посты?",
         reply_markup=tone_keyboard(),
     )
     await state.set_state(OnboardingStates.tone)
 
 
-# ---------- Q3: TONE ----------
+# ---------- Q3: TONE → ЗАВЕРШЕНИЕ ----------
 
 @router.callback_query(OnboardingStates.tone, F.data.startswith("tone:"))
 async def on_tone(callback: CallbackQuery, state: FSMContext) -> None:
@@ -125,51 +122,10 @@ async def on_tone(callback: CallbackQuery, state: FSMContext) -> None:
     await update_profile_field(callback.from_user.id, "tone", tone_value)
     await callback.answer()
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer(
-        f"Выбран: <b>{tone_value}</b>\n\n"
-        "<b>Вопрос 4 из 4</b>\n\n"
-        "Куда отправлять читателей в конце поста?\n"
-        "Telegram, сайт, бот, страница в Threads — любая ссылка.\n\n"
-        "Если ещё нет — пиши «нет»."
-    )
-    await state.set_state(OnboardingStates.product_link)
-
-
-# ---------- Q4: PRODUCT LINK ----------
-
-@router.message(OnboardingStates.product_link, F.text & ~F.text.startswith("/"))
-async def on_product_link(message: Message, state: FSMContext) -> None:
-    text = (message.text or "").strip()
-    if text.lower() in ("нет", "no", "—", "-"):
-        text = ""
-    await update_profile_field(message.from_user.id, "product_link", text)
-
-    await message.answer(
-        "<b>Бонус-вопрос</b> <i>(можно /skip)</i>\n\n"
-        "Конкретные результаты или цифры для убедительности постов?\n\n"
-        "Например:\n"
-        "— помог 47 клиентам выйти на 500к+ ₽/мес\n"
-        "— 12 лет в индустрии\n"
-        "— набрал 12к подписчиков в Threads за 2 недели\n\n"
-        "Делает посты в разы убедительнее. Если нет — жми /skip."
-    )
-    await state.set_state(OnboardingStates.social_proof)
-
-
-# ---------- Q5 (OPTIONAL): SOCIAL PROOF ----------
-
-@router.message(OnboardingStates.social_proof, Command("skip"))
-async def on_social_proof_skip(message: Message, state: FSMContext) -> None:
-    await _complete_onboarding(message, state)
-
-
-@router.message(OnboardingStates.social_proof, F.text & ~F.text.startswith("/"))
-async def on_social_proof(message: Message, state: FSMContext) -> None:
-    text = (message.text or "").strip()
-    await update_profile_field(message.from_user.id, "social_proof", text)
-    # facts оставляем пустым — мы его слили в social_proof по умолчанию,
-    # Gemini обработает корректно даже без personal facts
-    await _complete_onboarding(message, state)
+    # Раньше тут были ещё 2 вопроса (ссылка + social_proof). Убраны для
+    # сокращения drop-off на онбординге (было ~64%). Эти поля остаются
+    # пустыми в БД — юзер может добавить через профиль позже.
+    await _complete_onboarding(callback.message, state)
 
 
 # ---------- COMPLETION ----------
