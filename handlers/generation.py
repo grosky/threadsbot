@@ -136,7 +136,7 @@ async def start_generation(callback: CallbackQuery, state: FSMContext) -> None:
 
 # ---------- БЕСПЛАТНАЯ ГЕНЕРАЦИЯ (одна, без выбора длины, всегда длинный тред) ----------
 
-def _free_topic_keyboard() -> InlineKeyboardMarkup:
+def free_topic_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🎲 Удиви меня", callback_data="free_topic:surprise")],
@@ -180,7 +180,7 @@ async def start_free_generation(callback: CallbackQuery, state: FSMContext) -> N
         "что курсы все одинаковые»\n\n"
         "Бот сделает один развёрнутый пост под твою нишу.\n"
         "Или жми «🎲 Удиви меня» — подберёт тему сам.",
-        reply_markup=_free_topic_keyboard(),
+        reply_markup=free_topic_keyboard(),
     )
     await state.set_state(FreeTrialStates.entering_topic)
 
