@@ -123,9 +123,13 @@ async def on_tone(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await callback.message.edit_reply_markup(reply_markup=None)
     # Раньше тут были ещё 2 вопроса (ссылка + social_proof). Убраны для
-    # сокращения drop-off на онбординге (было ~64%). Эти поля остаются
-    # пустыми в БД — юзер может добавить через профиль позже.
-    await _complete_onboarding(callback.message, state)
+    # сокращения drop-off на онбординге. Эти поля остаются пустыми в БД —
+    # юзер может добавить через профиль позже.
+    # ВАЖНО: callback.message.from_user — это бот, поэтому user_id берём
+    # из callback.from_user явно.
+    await _complete_onboarding(
+        callback.message, state, user_id=callback.from_user.id,
+    )
 
 
 # ---------- COMPLETION ----------
@@ -145,8 +149,14 @@ def _packaging_offer_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-async def _complete_onboarding(message: Message, state: FSMContext) -> None:
-    user_id = message.from_user.id
+async def _complete_onboarding(
+    message: Message, state: FSMContext, user_id: int | None = None,
+) -> None:
+    # user_id передаётся явно из callback-хэндлеров, иначе берём из message.
+    # Это критично потому что message от CallbackQuery — это сообщение бота,
+    # message.from_user.id вернёт ID бота, а не юзера.
+    if user_id is None:
+        user_id = message.from_user.id
     await mark_onboarding_complete(user_id)
 
     sub_active = await is_subscription_active(user_id)
@@ -155,7 +165,7 @@ async def _complete_onboarding(message: Message, state: FSMContext) -> None:
     # Упаковка профиля доступна только по подписке. Free-trial юзерам
     # сразу указываем на бесплатную генерацию поста — это их главное действие.
     if not sub_active and trial_available:
-        await _finalize_onboarding_without_packaging(message, state)
+        await _finalize_onboarding_without_packaging(message, state, user_id=user_id)
         return
 
     # Подписчикам предлагаем упаковку профиля
@@ -187,11 +197,17 @@ async def on_pack_no(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    await _finalize_onboarding_without_packaging(callback.message, state)
+    await _finalize_onboarding_without_packaging(
+        callback.message, state, user_id=callback.from_user.id,
+    )
 
 
-async def _finalize_onboarding_without_packaging(message: Message, state: FSMContext) -> None:
-    user_id = message.from_user.id
+async def _finalize_onboarding_without_packaging(
+    message: Message, state: FSMContext, user_id: int | None = None,
+) -> None:
+    # См. комментарий в _complete_onboarding про message от CallbackQuery.
+    if user_id is None:
+        user_id = message.from_user.id
     await state.clear()
 
     sub_active = await is_subscription_active(user_id)
