@@ -322,33 +322,32 @@ async def update_profile_pack_block(
 # ---------- A/B ТЕСТ (с free trial vs без) ----------
 
 async def assign_ab_variant(telegram_id: int) -> str:
-    """Назначает A/B вариант новому юзеру.
+    """Назначает A/B вариант юзеру.
 
-    Если ab_variant уже выставлен — возвращает текущий.
-    Если NULL — рандомит 50/50 и сохраняет. Для варианта B сразу помечает
-    free_trial_used=1, чтобы вся существующая логика free trial его не пускала.
+    A/B тест free vs no-free завершён 2026-05-26 — победила ветка A
+    (free trial). B показала 0% конверсии на 95 юзерах, A — 4.9% на 326.
+    Решение зафиксировано в STRATEGY.md.
 
-    Возвращает финальный вариант: 'A' или 'B'.
+    Теперь:
+      - Все новые юзеры (ab_variant IS NULL) получают 'A'.
+      - Старые B-юзеры (~95 человек на момент закрытия теста) остаются
+        в 'B' и продолжают видеть welcome без free-кнопки. Если захочется
+        их вернуть — миграция отдельной командой.
+
+    Возвращает финальный вариант юзера.
     """
     user = await get_user(telegram_id)
     if user and user.get("ab_variant") in ("A", "B"):
         return user["ab_variant"]
 
-    variant = secrets.choice(("A", "B"))
+    # Новые юзеры — всегда A
     async with aiosqlite.connect(config.database_path) as db:
-        if variant == "B":
-            await db.execute(
-                "UPDATE users SET ab_variant = ?, free_trial_used = 1 "
-                "WHERE telegram_id = ?",
-                (variant, telegram_id),
-            )
-        else:
-            await db.execute(
-                "UPDATE users SET ab_variant = ? WHERE telegram_id = ?",
-                (variant, telegram_id),
-            )
+        await db.execute(
+            "UPDATE users SET ab_variant = ? WHERE telegram_id = ?",
+            ("A", telegram_id),
+        )
         await db.commit()
-    return variant
+    return "A"
 
 
 async def get_ab_metrics() -> dict:
