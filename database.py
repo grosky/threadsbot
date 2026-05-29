@@ -209,6 +209,11 @@ async def _migrate_users_columns(db: aiosqlite.Connection) -> None:
         # 'B' = без free trial (welcome → сразу paywall).
         # NULL = legacy юзеры до запуска теста, считаются как 'A'.
         await db.execute("ALTER TABLE users ADD COLUMN ab_variant TEXT")
+    if "product_pack_json" not in cols:
+        # Последние сгенерированные продуктовые идеи (5 шт + summary).
+        await db.execute(
+            "ALTER TABLE users ADD COLUMN product_pack_json TEXT"
+        )
     if "followup_start_at" not in cols:
         await db.execute(
             "ALTER TABLE users ADD COLUMN followup_start_at TIMESTAMP"
@@ -317,6 +322,29 @@ async def update_profile_pack_block(
     current = await get_profile_pack(telegram_id) or {}
     current[block_key] = value
     await save_profile_pack(telegram_id, current)
+
+
+async def save_product_pack(telegram_id: int, pack: dict) -> None:
+    """Сохраняет последний сгенерированный набор продуктовых идей."""
+    import json as _json
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "UPDATE users SET product_pack_json = ? WHERE telegram_id = ?",
+            (_json.dumps(pack, ensure_ascii=False), telegram_id),
+        )
+        await db.commit()
+
+
+async def get_product_pack(telegram_id: int) -> Optional[dict]:
+    """Возвращает сохранённый набор продуктовых идей или None."""
+    import json as _json
+    user = await get_user(telegram_id)
+    if not user or not user.get("product_pack_json"):
+        return None
+    try:
+        return _json.loads(user["product_pack_json"])
+    except (ValueError, TypeError):
+        return None
 
 
 # ---------- A/B ТЕСТ (с free trial vs без) ----------

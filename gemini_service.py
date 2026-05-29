@@ -27,6 +27,8 @@ from prompts import (
     PROFILE_PACKAGING_NAMES_SCHEMA,
     PROFILE_PACKAGING_PINNED_SCHEMA,
     PROFILE_PACKAGING_PROMPT,
+    PRODUCT_BUILDER_PROMPT,
+    PRODUCT_BUILDER_SCHEMA,
     RESPONSE_SCHEMA,
     STORYTELLING_PROMPT,
     STORYTELLING_SCHEMA,
@@ -37,6 +39,7 @@ from prompts import (
     build_humanize_message,
     build_ideas_user_message,
     build_profile_analysis_message,
+    build_product_builder_message,
     build_profile_packaging_message,
     build_storytelling_message,
     build_transform_message,
@@ -84,6 +87,13 @@ _TRANSFORM_CONFIG = types.GenerateContentConfig(
 )
 
 # Humanize: больше temperature для более вариативного «живого» голоса
+_PRODUCT_BUILDER_CONFIG = types.GenerateContentConfig(
+    system_instruction=PRODUCT_BUILDER_PROMPT,
+    temperature=0.85,
+    response_mime_type="application/json",
+    response_schema=PRODUCT_BUILDER_SCHEMA,
+)
+
 _HUMANIZE_CONFIG = types.GenerateContentConfig(
     system_instruction=HUMANIZE_PROMPT,
     temperature=1.0,
@@ -364,4 +374,24 @@ async def analyze_feed(profile: dict, posts: list[str]) -> dict:
     )
 
     response = await _call_with_fallback(user_msg, _FEED_ANALYSIS_CONFIG)
+    return json.loads(response.text)
+
+
+async def generate_product_ideas(
+    profile: dict,
+    expertise_text: str,
+    effort_level: str,
+) -> dict:
+    """Генерирует 5 продуктовых идей под автора с ценами и обоснованием.
+
+    Возвращает dict с ключами: summary, ideas (list of 5 dicts).
+    """
+    user_msg = build_product_builder_message(profile, expertise_text, effort_level)
+    log.info(
+        "Generating product ideas: user_id=%s effort=%s niche=%s",
+        profile.get("telegram_id"),
+        effort_level,
+        (profile.get("niche") or "—")[:60],
+    )
+    response = await _call_with_fallback(user_msg, _PRODUCT_BUILDER_CONFIG)
     return json.loads(response.text)
