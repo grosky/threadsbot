@@ -32,6 +32,8 @@ from prompts import (
     RESPONSE_SCHEMA,
     STORYTELLING_PROMPT,
     STORYTELLING_SCHEMA,
+    STYLE_LEARN_PROMPT,
+    STYLE_LEARN_SCHEMA,
     SYSTEM_PROMPT,
     TRANSFORM_PROMPT,
     TRANSFORM_SCHEMA,
@@ -41,7 +43,9 @@ from prompts import (
     build_profile_analysis_message,
     build_product_builder_message,
     build_profile_packaging_message,
+    build_partner_chat_system,
     build_storytelling_message,
+    build_style_learn_message,
     build_transform_message,
     build_user_message,
 )
@@ -108,6 +112,14 @@ _IDEAS_CONFIG = types.GenerateContentConfig(
     response_schema=IDEAS_SCHEMA,
 )
 
+# Обучение стилю: дистилляция фидбека в правила — нужна точность, не креатив.
+_STYLE_LEARN_CONFIG = types.GenerateContentConfig(
+    system_instruction=STYLE_LEARN_PROMPT,
+    temperature=0.3,
+    response_mime_type="application/json",
+    response_schema=STYLE_LEARN_SCHEMA,
+)
+
 
 def _packaging_config(target: str) -> "types.GenerateContentConfig":
     """Конфиг для упаковки профиля — схема меняется в зависимости от блока."""
@@ -131,6 +143,24 @@ def _packaging_config(target: str) -> "types.GenerateContentConfig":
 # есть fallback на стабильную 2.5 Flash.
 _MODEL_NAME = "gemini-3-flash-preview"
 _FALLBACK_MODEL = "gemini-2.5-flash"
+# Гибкий чат для партнёров — самая сильная модель + thinking.
+_CHAT_MODEL = "gemini-3-pro-preview"
+
+
+def _high_thinking_config():
+    """ThinkingConfig для Pro-чата, устойчивый к версии SDK.
+
+    Gemini 3 управляет рассуждением через thinking_level ('high'),
+    более старые сборки SDK — через thinking_budget. Пробуем по
+    очереди; если параметр не поддерживается — возвращаем None
+    (модель решит сама, фича не падает).
+    """
+    for kwargs in ({"thinking_level": "high"}, {"thinking_budget": 8192}):
+        try:
+            return types.ThinkingConfig(**kwargs)
+        except Exception:  # noqa: BLE001 — несовместимый параметр SDK
+            continue
+    return None
 
 
 def _is_503(exc: Exception) -> bool:
@@ -148,36 +178,40 @@ async def _call_with_fallback(
     config_obj,
     *,
     retry_delay: float = 2.0,
+    model: str | None = None,
+    fallback_model: str | None = None,
 ) -> "types.GenerateContentResponse":
     """Вызов Gemini с автоматическим retry и fallback на стабильную модель.
 
-    1. Пробуем _MODEL_NAME
+    1. Пробуем основную модель (по умолчанию _MODEL_NAME)
     2. При 503 — ждём retry_delay и пробуем ещё раз
-    3. Если опять 503 — переключаемся на _FALLBACK_MODEL
+    3. Если опять 503 — переключаемся на fallback (по умолчанию _FALLBACK_MODEL)
     """
+    primary = model or _MODEL_NAME
+    fallback = fallback_model or _FALLBACK_MODEL
     try:
         return await _client.aio.models.generate_content(
-            model=_MODEL_NAME, contents=contents, config=config_obj,
+            model=primary, contents=contents, config=config_obj,
         )
     except Exception as e:
         if not _is_503(e):
             raise
-        log.warning("Gemini %s 503, retrying after %ss: %s", _MODEL_NAME, retry_delay, e)
+        log.warning("Gemini %s 503, retrying after %ss: %s", primary, retry_delay, e)
         await asyncio.sleep(retry_delay)
 
         try:
             return await _client.aio.models.generate_content(
-                model=_MODEL_NAME, contents=contents, config=config_obj,
+                model=primary, contents=contents, config=config_obj,
             )
         except Exception as e2:
             if not _is_503(e2):
                 raise
             log.warning(
                 "Gemini %s still 503, falling back to %s: %s",
-                _MODEL_NAME, _FALLBACK_MODEL, e2,
+                primary, fallback, e2,
             )
             return await _client.aio.models.generate_content(
-                model=_FALLBACK_MODEL, contents=contents, config=config_obj,
+                model=fallback, contents=contents, config=config_obj,
             )
 
 
@@ -297,6 +331,26 @@ async def humanize_post(profile: dict, original_post: str) -> dict:
     return json.loads(response.text)
 
 
+async def learn_style_from_feedback(
+    current_memory: str,
+    feedback: str,
+    post: str,
+) -> dict:
+    """Дистиллирует обратную связь автора в обновлённые правила стиля.
+
+    Возвращает {memory, learned}: memory — полный обновлённый список правил
+    (его сохраняем в users.style_memory), learned — что нового выучено
+    (показываем автору для подтверждения).
+    """
+    user_msg = build_style_learn_message(current_memory, feedback, post)
+    log.info(
+        "Learning style from feedback: feedback='%s' mem_len=%d",
+        feedback[:80], len(current_memory or ""),
+    )
+    response = await _call_with_fallback(user_msg, _STYLE_LEARN_CONFIG)
+    return json.loads(response.text)
+
+
 async def generate_ideas(profile: dict) -> list[dict]:
     """Генерирует 10 идей для постов под профиль автора.
 
@@ -395,3 +449,41 @@ async def generate_product_ideas(
     )
     response = await _call_with_fallback(user_msg, _PRODUCT_BUILDER_CONFIG)
     return json.loads(response.text)
+
+
+async def partner_chat_reply(profile: dict, history: list[dict]) -> str:
+    """Свободный многоходовый чат с Gemini Pro (+thinking) для партнёров.
+
+    profile — словарь автора (ниша/ЦА/tone/product/style_memory).
+    history — [{role: 'user'|'model', content: str}, ...] в хронологии,
+    последним должно идти свежее сообщение пользователя.
+
+    Возвращает текст ответа (без JSON-схемы — живой разговор).
+    """
+    contents = [
+        types.Content(
+            role=("model" if m.get("role") == "model" else "user"),
+            parts=[types.Part(text=m.get("content") or "")],
+        )
+        for m in history
+        if (m.get("content") or "").strip()
+    ]
+
+    config_obj = types.GenerateContentConfig(
+        system_instruction=build_partner_chat_system(profile),
+        temperature=0.9,
+        thinking_config=_high_thinking_config(),
+    )
+
+    log.info(
+        "Partner chat: user_id=%s turns=%s",
+        profile.get("telegram_id"),
+        len(contents),
+    )
+    response = await _call_with_fallback(
+        contents,
+        config_obj,
+        model=_CHAT_MODEL,
+        fallback_model=_MODEL_NAME,
+    )
+    return (response.text or "").strip()

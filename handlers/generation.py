@@ -7,6 +7,7 @@ import time as _time
 from typing import Optional
 
 from aiogram import Bot, F, Router
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -26,14 +27,22 @@ from database import (
     can_generate_today,
     can_transform_today,
     can_use_free_trial,
+    clear_style_memory,
+    get_style_memory,
     get_user,
     has_access,
     is_subscription_active,
     log_generation,
     mark_free_trial_used,
     touch_streak,
+    update_style_memory,
 )
-from gemini_service import generate_posts, humanize_post, transform_post
+from gemini_service import (
+    generate_posts,
+    humanize_post,
+    learn_style_from_feedback,
+    transform_post,
+)
 from prompts import FORMAT_DETAILS, FORMAT_OPTIONS
 
 from .threads_connect import (
@@ -50,6 +59,7 @@ class GenerateStates(StatesGroup):
     choosing_length = State()
     entering_topic = State()
     waiting_refine_feedback = State()
+    waiting_style_feedback = State()
 
 
 class FreeTrialStates(StatesGroup):
@@ -766,3 +776,126 @@ async def apply_refine(message: Message, state: FSMContext, bot: Bot) -> None:
         text = text[:4000] + "\n…(обрезано)"
 
     await message.answer(text + warn, reply_markup=post_actions_keyboard(new_key))
+
+
+# ---------- ОБУЧЕНИЕ СТИЛЮ: «🎓 Обучить модель под себя» ----------
+
+def _mystyle_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🗑 Сбросить обучение", callback_data="style:clear"),
+    ]])
+
+
+@router.callback_query(F.data.startswith("post:learn:"))
+async def start_learn(callback: CallbackQuery, state: FSMContext) -> None:
+    """Юзер хочет обучить модель на основе ОС об этом посте."""
+    user_id = callback.from_user.id
+    post_key = callback.data.split(":", 2)[2]
+
+    original = await get_post(user_id, post_key)
+    if not original:
+        await callback.answer(
+            "Текст поста потерян (старше 24 ч). Сгенерируй заново.",
+            show_alert=True,
+        )
+        return
+
+    if not await is_subscription_active(user_id):
+        await callback.answer("Обучение доступно по подписке", show_alert=True)
+        return
+
+    await state.update_data(learn_post_key=post_key)
+    await state.set_state(GenerateStates.waiting_style_feedback)
+    await callback.answer()
+    await callback.message.answer(
+        "🎓 <b>Обучи бота под свой вкус</b>\n\n"
+        "Напиши свободным текстом, что в этом посте <b>нравится</b>, а что <b>нет</b>. "
+        "Бот запомнит твои предпочтения по стилю и будет учитывать их в следующих постах.\n\n"
+        "<i>Примеры:</i>\n"
+        "• «слишком пафосно и много капса, пиши спокойнее»\n"
+        "• «не начинай с вопроса, не люблю»\n"
+        "• «нравятся короткие абзацы, так и продолжай»\n"
+        "• «убери слово инсайт и подобный сленг»\n\n"
+        "<i>Отмена — /menu</i>"
+    )
+
+
+@router.message(GenerateStates.waiting_style_feedback, F.text & ~F.text.startswith("/"))
+async def apply_learn(message: Message, state: FSMContext) -> None:
+    feedback = (message.text or "").strip()
+    user_id = message.from_user.id
+    data = await state.get_data()
+    post_key = data.get("learn_post_key")
+    original = await get_post(user_id, post_key) if post_key else None
+
+    await state.clear()
+
+    if not feedback:
+        return
+    if not original:
+        await message.answer("Текст поста потерян. Сгенерируй заново и попробуй ещё раз.")
+        return
+    if not await is_subscription_active(user_id):
+        await message.answer("❌ Обучение доступно по подписке.")
+        return
+
+    current = await get_style_memory(user_id)
+
+    status_msg = await message.answer("🧠 Запоминаю твой стиль...")
+    try:
+        result = await learn_style_from_feedback(current, feedback, original)
+    except Exception as e:
+        log.exception("Style learning failed for user %s", user_id)
+        await status_msg.edit_text(
+            f"❌ Не получилось запомнить. <code>{html.escape(type(e).__name__)}: "
+            f"{html.escape(str(e))[:200]}</code>"
+        )
+        return
+
+    new_memory = str(result.get("memory", "")).strip()
+    learned = str(result.get("learned", "Запомнил твои правки.")).strip()
+
+    if new_memory:
+        await update_style_memory(user_id, new_memory)
+
+    await status_msg.delete()
+    await message.answer(
+        "✅ <b>Готово, обучился.</b>\n\n"
+        f"<i>{html.escape(learned)}</i>\n\n"
+        "Применю в следующих генерациях. Посмотреть или сбросить всё "
+        "выученное — команда /mystyle.",
+        reply_markup=_mystyle_keyboard(),
+    )
+
+
+@router.message(Command("mystyle"))
+async def cmd_mystyle(message: Message) -> None:
+    """Показать накопленную память стиля + дать сбросить."""
+    memory = await get_style_memory(message.from_user.id)
+    if not memory:
+        await message.answer(
+            "🎓 <b>Память стиля пока пуста.</b>\n\n"
+            "Под любым сгенерированным постом жми «🎓 Обучить модель под себя» "
+            "и напиши, что нравится, а что нет — бот начнёт подстраиваться под твой вкус."
+        )
+        return
+    await message.answer(
+        "🎓 <b>Что бот про тебя выучил</b>\n\n"
+        "Эти правила он учитывает в каждой генерации:\n\n"
+        f"{html.escape(memory)}\n\n"
+        "<i>Хочешь начать с чистого листа — жми кнопку.</i>",
+        reply_markup=_mystyle_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "style:clear")
+async def clear_learned_style(callback: CallbackQuery) -> None:
+    await clear_style_memory(callback.from_user.id)
+    await callback.answer("Память стиля сброшена")
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.message.answer(
+        "🧹 Готово — обнулил выученный стиль. Дальше можешь обучить заново."
+    )

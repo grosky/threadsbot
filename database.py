@@ -4,6 +4,7 @@
 - На Railway SQLite живёт во временном диске — для прод-нагрузки переходи на Postgres.
 - Все запросы async. row_factory = aiosqlite.Row даёт dict-доступ к результатам.
 """
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -11,6 +12,8 @@ from typing import Optional
 import aiosqlite
 
 from config import DAILY_LIMIT, config
+
+log = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -161,6 +164,19 @@ CREATE TABLE IF NOT EXISTS partner_links (
 CREATE INDEX IF NOT EXISTS idx_partner_links_partner
     ON partner_links(partner_telegram_id);
 
+-- Свободный чат с Gemini (для партнёров + админа): доработка постов.
+-- Один непрерывный чат на юзера, role = 'user' | 'model'.
+CREATE TABLE IF NOT EXISTS partner_chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_partner_chat_user
+    ON partner_chat_messages(user_id, id);
+
 CREATE TABLE IF NOT EXISTS viral_posts (
     threads_id TEXT PRIMARY KEY,
     permalink TEXT NOT NULL,
@@ -222,6 +238,10 @@ async def _migrate_users_columns(db: aiosqlite.Connection) -> None:
         await db.execute(
             "ALTER TABLE users ADD COLUMN followup_sent_mask INTEGER DEFAULT 0"
         )
+    if "style_memory" not in cols:
+        # Выученные правила стиля автора — копятся из обратной связи юзера
+        # на сгенерированные посты, подмешиваются в промт следующих генераций.
+        await db.execute("ALTER TABLE users ADD COLUMN style_memory TEXT")
 
 
 async def _migrate_referrals_columns(db: aiosqlite.Connection) -> None:
@@ -232,12 +252,33 @@ async def _migrate_referrals_columns(db: aiosqlite.Connection) -> None:
         await db.execute("ALTER TABLE referrals ADD COLUMN source TEXT")
 
 
+async def _backfill_onboarding_complete(db: aiosqlite.Connection) -> None:
+    """Чинит юзеров, прошедших онбординг до фикса #50.
+
+    Старый баг: в callback-флоу (выбор tone кнопкой) onboarding_complete
+    не выставлялся. Такие юзеры заполнили niche/audience/tone, но флаг
+    остался 0 — и любой фича-гейт `if not onboarding_complete` выкидывает
+    их обратно в онбординг. Восстанавливаем флаг по факту заполненного
+    профиля. Идемпотентно: после первого прогона строк под условие нет.
+    """
+    cur = await db.execute(
+        "UPDATE users SET onboarding_complete = 1 "
+        "WHERE COALESCE(onboarding_complete, 0) = 0 "
+        "  AND niche IS NOT NULL AND TRIM(niche) != '' "
+        "  AND audience IS NOT NULL AND TRIM(audience) != '' "
+        "  AND tone IS NOT NULL AND TRIM(tone) != ''"
+    )
+    if cur.rowcount:
+        log.info("Backfill onboarding_complete: восстановлено %s юзеров", cur.rowcount)
+
+
 async def init_db() -> None:
     """Создаёт таблицы при первом запуске + миграции колонок."""
     async with aiosqlite.connect(config.database_path) as db:
         await db.executescript(SCHEMA)
         await _migrate_users_columns(db)
         await _migrate_referrals_columns(db)
+        await _backfill_onboarding_complete(db)
         await db.commit()
 
 
@@ -345,6 +386,31 @@ async def get_product_pack(telegram_id: int) -> Optional[dict]:
         return _json.loads(user["product_pack_json"])
     except (ValueError, TypeError):
         return None
+
+
+# ---------- ПАМЯТЬ СТИЛЯ (обучение на обратной связи) ----------
+
+async def get_style_memory(telegram_id: int) -> str:
+    """Возвращает выученные правила стиля автора (или пустую строку)."""
+    user = await get_user(telegram_id)
+    if not user:
+        return ""
+    return (user.get("style_memory") or "").strip()
+
+
+async def update_style_memory(telegram_id: int, memory: str) -> None:
+    """Перезаписывает память стиля (модель сама мерджит/дедуплицирует)."""
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "UPDATE users SET style_memory = ? WHERE telegram_id = ?",
+            ((memory or "").strip(), telegram_id),
+        )
+        await db.commit()
+
+
+async def clear_style_memory(telegram_id: int) -> None:
+    """Сбрасывает память стиля автора."""
+    await update_style_memory(telegram_id, "")
 
 
 # ---------- A/B ТЕСТ (с free trial vs без) ----------
@@ -1340,6 +1406,70 @@ async def get_partner_links(partner_telegram_id: int) -> list[dict]:
             (partner_telegram_id,),
         ) as cur:
             return [dict(row) for row in await cur.fetchall()]
+
+
+async def is_partner(telegram_id: int) -> bool:
+    """True, если у юзера есть хотя бы одна партнёрская ссылка."""
+    async with aiosqlite.connect(config.database_path) as db:
+        async with db.execute(
+            "SELECT 1 FROM partner_links WHERE partner_telegram_id = ? LIMIT 1",
+            (telegram_id,),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+
+# ---------- PARTNER CHAT (свободный чат с Gemini) ----------
+
+async def add_partner_chat_message(
+    user_id: int, role: str, content: str
+) -> None:
+    """Сохраняет одно сообщение чата. role = 'user' | 'model'."""
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "INSERT INTO partner_chat_messages (user_id, role, content) "
+            "VALUES (?, ?, ?)",
+            (user_id, role, content),
+        )
+        await db.commit()
+
+
+async def get_partner_chat_history(
+    user_id: int, limit: int = 40
+) -> list[dict]:
+    """Последние `limit` сообщений в хронологическом порядке.
+
+    Возвращает [{role, content}, ...] от старых к новым.
+    """
+    async with aiosqlite.connect(config.database_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT role, content FROM partner_chat_messages "
+            "WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+            (user_id, limit),
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+    rows.reverse()
+    return rows
+
+
+async def count_partner_chat_messages(user_id: int) -> int:
+    async with aiosqlite.connect(config.database_path) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM partner_chat_messages WHERE user_id = ?",
+            (user_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
+
+async def clear_partner_chat(user_id: int) -> None:
+    """Удаляет всю историю чата юзера (кнопка «Новый чат»)."""
+    async with aiosqlite.connect(config.database_path) as db:
+        await db.execute(
+            "DELETE FROM partner_chat_messages WHERE user_id = ?",
+            (user_id,),
+        )
+        await db.commit()
 
 
 # ---------- VIRAL POSTS (кэш топовых веток через threads_keyword_search) ----------

@@ -21,6 +21,7 @@ from database import (
     get_threads_account,
     get_user,
     get_user_achievements,
+    is_partner,
     is_subscription_active,
 )
 
@@ -38,7 +39,9 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def create_menu_keyboard(has_free_trial: bool = False) -> InlineKeyboardMarkup:
+def create_menu_keyboard(
+    has_free_trial: bool = False, show_partner_chat: bool = False
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if has_free_trial:
         rows.append([InlineKeyboardButton(
@@ -52,6 +55,12 @@ def create_menu_keyboard(has_free_trial: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🆕 Упаковать профиль", callback_data="action:pack_profile")],
         [InlineKeyboardButton(text="🚀 Создать продукт", callback_data="action:build_product")],
     ])
+    # Гибкий чат с Gemini Pro — только партнёрам и админу.
+    if show_partner_chat:
+        rows.append([InlineKeyboardButton(
+            text="💬 Чат с Gemini (партнёрам)",
+            callback_data="action:partner_chat",
+        )])
     # «Свой пост» = только для публикации в Threads. Прячем до App Review.
     if config.threads_publish_enabled:
         rows.append([InlineKeyboardButton(
@@ -193,8 +202,19 @@ async def go_create(callback: CallbackQuery) -> None:
     ])
     if config.threads_publish_enabled:
         lines.append("✍️ <b>Свой пост</b> — пишешь руками, бот публикует в Threads")
+
+    show_partner_chat = (
+        user_id == config.admin_telegram_id or await is_partner(user_id)
+    )
+    if show_partner_chat:
+        lines.append(
+            "💬 <b>Чат с Gemini</b> — гибкий диалог: кидаешь пост конкурента, "
+            "дорабатываете вместе"
+        )
     text = "\n".join(lines)
-    kb = create_menu_keyboard(has_free_trial=has_free_trial)
+    kb = create_menu_keyboard(
+        has_free_trial=has_free_trial, show_partner_chat=show_partner_chat
+    )
     try:
         await callback.message.edit_text(text, reply_markup=kb)
     except Exception:

@@ -19,6 +19,7 @@ from .threads_connect import router as threads_connect_router
 from .custom_post import router as custom_post_router
 from .brainstorm import router as brainstorm_router
 from .trends import router as trends_router
+from .partner_chat import router as partner_chat_router
 from .menu import router as menu_router
 
 
@@ -37,4 +38,5 @@ def setup_routers(dp: Dispatcher) -> None:
     dp.include_router(custom_post_router)
     dp.include_router(brainstorm_router)
     dp.include_router(trends_router)
+    dp.include_router(partner_chat_router)
     dp.include_router(menu_router)
