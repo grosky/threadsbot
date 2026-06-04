@@ -1607,6 +1607,16 @@ async def get_admin_overview() -> dict:
             "SELECT COUNT(*) FROM threads_accounts"
         )
 
+        # Рефералы: сколько всего приглашений, сколько разных людей
+        # вообще кого-то пригласили, сколько приглашений довели до награды.
+        referrals_total = await _scalar("SELECT COUNT(*) FROM referrals")
+        referrers_distinct = await _scalar(
+            "SELECT COUNT(DISTINCT referrer_id) FROM referrals"
+        )
+        referrals_rewarded = await _scalar(
+            "SELECT COUNT(*) FROM referrals WHERE rewarded_at IS NOT NULL"
+        )
+
     return {
         "total_users": total_users,
         "onboarded": onboarded,
@@ -1620,4 +1630,7 @@ async def get_admin_overview() -> dict:
         "revenue_total_kopecks": revenue_total_kopecks,
         "payments_count": payments_count,
         "threads_connected": threads_connected,
+        "referrals_total": referrals_total,
+        "referrers_distinct": referrers_distinct,
+        "referrals_rewarded": referrals_rewarded,
     }

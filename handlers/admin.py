@@ -81,6 +81,11 @@ async def cmd_admin(message: Message) -> None:
         "",
         "<b>Threads</b>",
         f"Подключённых аккаунтов: <b>{stats['threads_connected']}</b>",
+        "",
+        "<b>Рефералы</b>",
+        f"Всего приглашений: <b>{stats['referrals_total']}</b>",
+        f"Пригласивших (уник.): <b>{stats['referrers_distinct']}</b>",
+        f"Доведено до награды: <b>{stats['referrals_rewarded']}</b>",
     ]
 
     # A/B тест блок
