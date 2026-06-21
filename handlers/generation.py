@@ -242,10 +242,18 @@ async def _do_free_generate(
         await state.clear()
         return
 
-    status_msg = await message.answer("🧠 Думаю... ~15-20 секунд")
+    status_msg = await message.answer("🧠 Пишу и довожу до ума... ~40-60 секунд")
+
+    async def _progress(text: str) -> None:
+        try:
+            await status_msg.edit_text(text)
+        except Exception:
+            pass
 
     try:
-        variants = await generate_posts(profile, topic, length="long")
+        variants = await generate_posts(
+            profile, topic, length="long", on_progress=_progress,
+        )
     except Exception as e:
         log.exception("Free generation failed for user %s", user_id)
         await status_msg.edit_text(
@@ -397,10 +405,18 @@ async def _do_generate(
         await state.clear()
         return
 
-    status_msg = await message.answer("🧠 Думаю... ~10-15 секунд")
+    status_msg = await message.answer("🧠 Пишу и довожу до ума... ~40-60 секунд")
+
+    async def _progress(text: str) -> None:
+        try:
+            await status_msg.edit_text(text)
+        except Exception:
+            pass
 
     try:
-        variants = await generate_posts(profile, topic, length=length)
+        variants = await generate_posts(
+            profile, topic, length=length, on_progress=_progress,
+        )
     except Exception as e:
         log.exception("Generation failed for user %s", user_id)
         await status_msg.edit_text(

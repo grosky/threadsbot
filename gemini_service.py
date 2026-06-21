@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from typing import Awaitable, Callable
 
 from google import genai
 from google.genai import types
@@ -25,9 +26,15 @@ from prompts import (
     PROFILE_PACKAGING_FULL_SCHEMA,
     PROFILE_PACKAGING_LINK_SCHEMA,
     PROFILE_PACKAGING_NAMES_SCHEMA,
+    POST_AUDIT_PROMPT,
+    POST_AUDIT_SCHEMA,
+    POST_REVISE_PROMPT,
+    POST_REVISE_SCHEMA,
     PROFILE_PACKAGING_PINNED_SCHEMA,
     PROFILE_PACKAGING_PROMPT,
     PRODUCT_BUILDER_PROMPT,
+    READER_REACTION_PROMPT,
+    READER_REACTION_SCHEMA,
     PRODUCT_BUILDER_SCHEMA,
     RESPONSE_SCHEMA,
     STORYTELLING_PROMPT,
@@ -43,7 +50,10 @@ from prompts import (
     build_profile_analysis_message,
     build_product_builder_message,
     build_profile_packaging_message,
+    build_audit_message,
     build_partner_chat_system,
+    build_reader_message,
+    build_revise_message,
     build_storytelling_message,
     build_style_learn_message,
     build_transform_message,
@@ -120,6 +130,26 @@ _STYLE_LEARN_CONFIG = types.GenerateContentConfig(
     response_schema=STYLE_LEARN_SCHEMA,
 )
 
+# Quality-конвейер: аудит (критик), взгляд зрителя (читатель), доработка (редактор).
+_AUDIT_CONFIG = types.GenerateContentConfig(
+    system_instruction=POST_AUDIT_PROMPT,
+    temperature=0.2,  # детерминированная оценка
+    response_mime_type="application/json",
+    response_schema=POST_AUDIT_SCHEMA,
+)
+_READER_CONFIG = types.GenerateContentConfig(
+    system_instruction=READER_REACTION_PROMPT,
+    temperature=0.6,  # живая, но стабильная реакция
+    response_mime_type="application/json",
+    response_schema=READER_REACTION_SCHEMA,
+)
+_REVISE_CONFIG = types.GenerateContentConfig(
+    system_instruction=POST_REVISE_PROMPT,
+    temperature=0.85,  # креативный рерайт
+    response_mime_type="application/json",
+    response_schema=POST_REVISE_SCHEMA,
+)
+
 
 def _packaging_config(target: str) -> "types.GenerateContentConfig":
     """Конфиг для упаковки профиля — схема меняется в зависимости от блока."""
@@ -145,6 +175,11 @@ _MODEL_NAME = "gemini-3-flash-preview"
 _FALLBACK_MODEL = "gemini-2.5-flash"
 # Гибкий чат для партнёров — самая сильная модель + thinking.
 _CHAT_MODEL = "gemini-3-pro-preview"
+
+# Quality-конвейер: цикл доработки до «зрителю интересно».
+_INTEREST_TARGET = 9   # порог оценки интереса зрителя (0-10), при котором выходим
+_MAX_REFINE_ITERS = 2  # макс. итераций цикла зритель->доработка
+_STALL_PATIENCE = 1    # стоп, если балл не вырос столько итераций подряд
 
 
 def _high_thinking_config():
@@ -215,18 +250,148 @@ async def _call_with_fallback(
             )
 
 
+# ---------- QUALITY-КОНВЕЙЕР ----------
+
+async def _emit(on_progress, text: str) -> None:
+    """Шлёт веху прогресса юзеру; ошибка прогресса не валит генерацию."""
+    if on_progress is None:
+        return
+    try:
+        await on_progress(text)
+    except Exception:  # noqa: BLE001 — прогресс не критичен
+        pass
+
+
+async def _safe(coro, fallback, label: str):
+    """Выполняет этап конвейера; при сбое логирует и деградирует к fallback."""
+    try:
+        return await coro
+    except Exception as e:  # noqa: BLE001
+        log.warning("pipeline stage %s failed, degrading: %s", label, e)
+        return fallback
+
+
+async def audit_post(post: str, fmt: str, profile: dict, length: str) -> dict:
+    """Этап АУДИТ: критик оценивает пост по рубрике (модель Pro)."""
+    msg = build_audit_message(post, fmt, profile, length)
+    resp = await _call_with_fallback(
+        msg, _AUDIT_CONFIG, model=_CHAT_MODEL, fallback_model=_MODEL_NAME,
+    )
+    return json.loads(resp.text)
+
+
+async def reader_react(post: str, profile: dict, length: str) -> dict:
+    """Этап ВЗГЛЯД ЗРИТЕЛЯ: живой читатель ленты оценивает интерес (модель Pro)."""
+    msg = build_reader_message(post, profile, length)
+    resp = await _call_with_fallback(
+        msg, _READER_CONFIG, model=_CHAT_MODEL, fallback_model=_MODEL_NAME,
+    )
+    return json.loads(resp.text)
+
+
+async def revise_post(
+    post: str, fmt: str, audit: dict, reaction: dict, profile: dict, length: str,
+) -> dict:
+    """Этап ДОРАБОТКА: редактор переписывает проблемные места (модель Flash)."""
+    msg = build_revise_message(post, fmt, audit, reaction, profile, length)
+    resp = await _call_with_fallback(msg, _REVISE_CONFIG)
+    return json.loads(resp.text)
+
+
+# Нейтральные fallback-значения этапов (деградация без падения генерации).
+_NEUTRAL_AUDIT = {
+    "scores": {}, "problems": [],
+    "fabricated_stats": False, "moral_ending": False, "needs_fix": False,
+}
+
+
+def _neutral_reaction(score: int) -> dict:
+    return {
+        "interest_score": score, "hook_grab": True, "what_grabbed": "",
+        "boring_spots": [], "would_scroll_past": False, "comment": "",
+    }
+
+
+async def refine_variant(variant: dict, profile: dict, length: str) -> dict:
+    """Прогоняет один вариант: аудит + взгляд зрителя -> цикл доработки.
+
+    Возвращает {**variant, "post": лучшая_версия, "_interest_score", "_iterations"}.
+    Всегда отдаёт рабочий вариант — при сбоях этапов деградирует к лучшему из имеющихся.
+    """
+    fmt = variant.get("format", "")
+    best_post = variant.get("post", "") or ""
+    if not best_post:
+        return variant
+
+    # АУДИТ + ВЗГЛЯД ЗРИТЕЛЯ параллельно (узлы независимы).
+    audit, reaction = await asyncio.gather(
+        _safe(audit_post(best_post, fmt, profile, length), dict(_NEUTRAL_AUDIT), "audit"),
+        _safe(reader_react(best_post, profile, length), _neutral_reaction(_INTEREST_TARGET), "reader"),
+    )
+    best_score = int(reaction.get("interest_score", 0) or 0)
+    critical = bool(audit.get("fabricated_stats") or audit.get("moral_ending"))
+    iterations = 0
+
+    # Ранний выход: пост чистый и зрителю интересно.
+    if not critical and not audit.get("needs_fix") and best_score >= _INTEREST_TARGET:
+        return {**variant, "post": best_post, "_interest_score": best_score, "_iterations": 0}
+
+    # Цикл доработки: держим версию с максимальным баллом (доработка может ухудшить).
+    stall = 0
+    for i in range(_MAX_REFINE_ITERS):
+        iterations = i + 1
+        revised = await _safe(
+            revise_post(best_post, fmt, audit, reaction, profile, length),
+            {"post": best_post}, "revise",
+        )
+        new_post = (revised.get("post") or "").strip() or best_post
+
+        reaction = await _safe(
+            reader_react(new_post, profile, length),
+            _neutral_reaction(best_score), "reader",
+        )
+        new_score = int(reaction.get("interest_score", best_score) or best_score)
+
+        if new_score >= best_score:
+            best_post, best_score = new_post, new_score
+            stall = 0
+        else:
+            stall += 1
+
+        if best_score >= _INTEREST_TARGET:
+            break
+        if stall > _STALL_PATIENCE:
+            break
+
+    # Финальные ворота: критичные нарушения (выдуманные цифры / мораль) не должны остаться.
+    final_audit = await _safe(
+        audit_post(best_post, fmt, profile, length), dict(_NEUTRAL_AUDIT), "audit",
+    )
+    if final_audit.get("fabricated_stats") or final_audit.get("moral_ending"):
+        fixed = await _safe(
+            revise_post(best_post, fmt, final_audit, reaction, profile, length),
+            {"post": best_post}, "revise",
+        )
+        best_post = (fixed.get("post") or "").strip() or best_post
+
+    return {**variant, "post": best_post, "_interest_score": best_score, "_iterations": iterations}
+
+
 async def generate_posts(
     profile: dict,
     topic: str | None = None,
     length: str = "long",
+    on_progress: Callable[[str], Awaitable[None]] | None = None,
 ) -> list[dict]:
-    """Возвращает список из 3 вариантов поста в РАЗНЫХ форматах.
+    """3 варианта поста, прогнанных через quality-конвейер.
 
-    Gemini сам выбирает 3 формата (манифест / разбор / контринтуитивный /
-    история / метод_известного) — юзер не указывает.
+    ДРАФТ (Gemini рисует 3 архетипа) -> для КАЖДОГО варианта конкурентно
+    АУДИТ + ВЗГЛЯД ЗРИТЕЛЯ -> цикл доработки, пока интерес зрителя < порога.
+    Формат возврата прежний: list[dict] с ключами post/format/id/... (плюс
+    служебные _interest_score/_iterations, которые хэндлеры игнорируют).
 
-    length="short" — каждый вариант ≤ 450 символов (один пост в Threads).
-    length="long" — полноценный развёрнутый пост (1500-2500 символов).
+    on_progress — опц. async-колбэк для вех прогресса (конвейер долгий).
+    length="short" — каждый вариант ≤ 450 символов; "long" — развёрнутый.
     """
     user_msg = build_user_message(profile, topic, length=length)
     log.info(
@@ -236,19 +401,36 @@ async def generate_posts(
         topic or "—",
     )
 
+    # --- ЭТАП 1: ДРАФТ (как раньше, с retry на битый JSON) ---
+    await _emit(on_progress, "🧠 Пишу черновик...")
     try:
         response = await _call_with_fallback(user_msg, _GENERATION_CONFIG)
-        data = json.loads(response.text)
-        variants = data["variants"]
-        if not isinstance(variants, list) or len(variants) < 1:
-            raise ValueError("Gemini вернул пустой список variants")
-        return variants
+        draft = json.loads(response.text)["variants"]
     except json.JSONDecodeError:
-        # Retry с явным напоминанием о формате
         log.warning("JSON decode failed, retrying with explicit reminder")
         retry_msg = user_msg + "\n\nВЕРНИ ТОЛЬКО ВАЛИДНЫЙ JSON БЕЗ ОБРАМЛЕНИЯ."
         response = await _call_with_fallback(retry_msg, _GENERATION_CONFIG)
-        return json.loads(response.text)["variants"]
+        draft = json.loads(response.text)["variants"]
+
+    if not isinstance(draft, list) or len(draft) < 1:
+        raise ValueError("Gemini вернул пустой список variants")
+
+    # --- ЭТАПЫ 2-5: конкурентный refine всех вариантов ---
+    await _emit(on_progress, "🔍 Проверяю по чек-листу и читаю глазами зрителя...")
+    try:
+        refined = await asyncio.gather(
+            *[refine_variant(v, profile, length) for v in draft],
+            return_exceptions=True,
+        )
+    except Exception as e:  # noqa: BLE001 — тотальная деградация к черновику
+        log.warning("refine pipeline failed entirely, returning draft: %s", e)
+        return draft
+
+    # Поэлементная деградация: упавший вариант заменяем его черновиком.
+    out = [r if isinstance(r, dict) else v for v, r in zip(draft, refined)]
+
+    await _emit(on_progress, "✨ Довожу до 10/10...")
+    return out
 
 
 async def analyze_profile(
