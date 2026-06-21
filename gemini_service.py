@@ -329,11 +329,16 @@ async def refine_variant(variant: dict, profile: dict, length: str) -> dict:
         _safe(reader_react(best_post, profile, length), _neutral_reaction(_INTEREST_TARGET), "reader"),
     )
     best_score = int(reaction.get("interest_score", 0) or 0)
+    initial_score = best_score
     critical = bool(audit.get("fabricated_stats") or audit.get("moral_ending"))
     iterations = 0
 
     # Ранний выход: пост чистый и зрителю интересно.
     if not critical and not audit.get("needs_fix") and best_score >= _INTEREST_TARGET:
+        log.info(
+            "refine id=%s fmt=%s: ранний выход, интерес=%s/10 (черновик чист)",
+            variant.get("id"), fmt, best_score,
+        )
         return {**variant, "post": best_post, "_interest_score": best_score, "_iterations": 0}
 
     # Цикл доработки: держим версию с максимальным баллом (доработка может ухудшить).
@@ -364,16 +369,22 @@ async def refine_variant(variant: dict, profile: dict, length: str) -> dict:
             break
 
     # Финальные ворота: критичные нарушения (выдуманные цифры / мораль) не должны остаться.
+    gate_fired = False
     final_audit = await _safe(
         audit_post(best_post, fmt, profile, length), dict(_NEUTRAL_AUDIT), "audit",
     )
     if final_audit.get("fabricated_stats") or final_audit.get("moral_ending"):
+        gate_fired = True
         fixed = await _safe(
             revise_post(best_post, fmt, final_audit, reaction, profile, length),
             {"post": best_post}, "revise",
         )
         best_post = (fixed.get("post") or "").strip() or best_post
 
+    log.info(
+        "refine id=%s fmt=%s: интерес %s->%s/10, итераций=%s, финальные_ворота=%s",
+        variant.get("id"), fmt, initial_score, best_score, iterations, gate_fired,
+    )
     return {**variant, "post": best_post, "_interest_score": best_score, "_iterations": iterations}
 
 
@@ -429,6 +440,11 @@ async def generate_posts(
     # Поэлементная деградация: упавший вариант заменяем его черновиком.
     out = [r if isinstance(r, dict) else v for v, r in zip(draft, refined)]
 
+    log.info(
+        "Pipeline готов: user=%s len=%s итоги(id,интерес,итер)=%s",
+        profile.get("telegram_id"), length,
+        [(v.get("id"), v.get("_interest_score"), v.get("_iterations")) for v in out],
+    )
     await _emit(on_progress, "✨ Довожу до 10/10...")
     return out
 
