@@ -289,6 +289,23 @@ async def _call_with_fallback(
 
 # ---------- QUALITY-КОНВЕЙЕР ----------
 
+def _normalize_dashes(text: str) -> str:
+    """Длинное (—) и среднее (–) тире -> дефис.
+
+    Детерминированно, в коде: длинное тире — известный AI-маркер, а модель
+    игнорит правило промта. Заменяем гарантированно на выходе генерации.
+    """
+    return (text or "").replace("—", "-").replace("–", "-")
+
+
+def _normalize_variants_dashes(variants: list[dict]) -> list[dict]:
+    """Применяет _normalize_dashes к полю post каждого варианта."""
+    for v in variants:
+        if isinstance(v, dict) and v.get("post"):
+            v["post"] = _normalize_dashes(str(v["post"]))
+    return variants
+
+
 async def _emit(on_progress, text: str) -> None:
     """Шлёт веху прогресса юзеру; ошибка прогресса не валит генерацию."""
     if on_progress is None:
@@ -483,10 +500,11 @@ async def generate_posts(
         )
     except Exception as e:  # noqa: BLE001 — тотальная деградация к черновику
         log.warning("refine pipeline failed entirely, returning draft: %s", e)
-        return draft
+        return _normalize_variants_dashes(draft)
 
     # Поэлементная деградация: упавший вариант заменяем его черновиком.
     out = [r if isinstance(r, dict) else v for v, r in zip(draft, refined)]
+    _normalize_variants_dashes(out)  # длинное тире -> дефис, гарантированно
 
     log.info(
         "Pipeline готов: user=%s len=%s итоги(id,интерес,итер)=%s",
@@ -557,7 +575,10 @@ async def transform_post(
         profile.get("telegram_id"), instruction[:60], len(original_post),
     )
     response = await _call_with_fallback(user_msg, _TRANSFORM_CONFIG)
-    return json.loads(response.text)
+    data = json.loads(response.text)
+    if isinstance(data.get("post"), str):
+        data["post"] = _normalize_dashes(data["post"])
+    return data
 
 
 async def humanize_post(profile: dict, original_post: str) -> dict:
@@ -574,7 +595,10 @@ async def humanize_post(profile: dict, original_post: str) -> dict:
         profile.get("telegram_id"), len(original_post),
     )
     response = await _call_with_fallback(user_msg, _HUMANIZE_CONFIG)
-    return json.loads(response.text)
+    data = json.loads(response.text)
+    if isinstance(data.get("post"), str):
+        data["post"] = _normalize_dashes(data["post"])
+    return data
 
 
 async def learn_style_from_feedback(
