@@ -173,8 +173,10 @@ def _packaging_config(target: str) -> "types.GenerateContentConfig":
 # есть fallback на стабильную 2.5 Flash.
 _MODEL_NAME = "gemini-3-flash-preview"
 _FALLBACK_MODEL = "gemini-2.5-flash"
-# Гибкий чат для партнёров — самая сильная модель + thinking.
-_CHAT_MODEL = "gemini-3-pro-preview"
+# Сильная модель (аудит/зритель в конвейере + партнёрский чат + thinking).
+# gemini-3-pro-preview снят 2026-03-09 -> текущая 3.1 Pro Preview.
+# При недоступности _call_with_fallback сам уйдёт на _MODEL_NAME (Flash).
+_CHAT_MODEL = "gemini-3.1-pro-preview"
 
 # Quality-конвейер: цикл доработки до «зрителю интересно».
 _INTEREST_TARGET = 9   # порог оценки интереса зрителя (0-10), при котором выходим
@@ -208,6 +210,20 @@ def _is_503(exc: Exception) -> bool:
     )
 
 
+def _is_model_unavailable(exc: Exception) -> bool:
+    """Модель не найдена / снята (404 / not found / no longer available).
+
+    Google периодически выпиливает preview-модели — тогда нужен немедленный
+    fallback на стабильную модель, без бессмысленных ретраев.
+    """
+    msg = str(exc).lower()
+    return any(
+        s in msg for s in (
+            "404", "not_found", "not found", "no longer available", "not available",
+        )
+    )
+
+
 async def _call_with_fallback(
     contents,
     config_obj,
@@ -219,8 +235,9 @@ async def _call_with_fallback(
     """Вызов Gemini с автоматическим retry и fallback на стабильную модель.
 
     1. Пробуем основную модель (по умолчанию _MODEL_NAME)
-    2. При 503 — ждём retry_delay и пробуем ещё раз
-    3. Если опять 503 — переключаемся на fallback (по умолчанию _FALLBACK_MODEL)
+    2. Если модель снята/недоступна (404) — СРАЗУ на fallback, без ретраев
+    3. При 503 — ждём retry_delay и пробуем ещё раз
+    4. Если опять 503 — переключаемся на fallback (по умолчанию _FALLBACK_MODEL)
     """
     primary = model or _MODEL_NAME
     fallback = fallback_model or _FALLBACK_MODEL
@@ -229,6 +246,15 @@ async def _call_with_fallback(
             model=primary, contents=contents, config=config_obj,
         )
     except Exception as e:
+        # Модель снята/недоступна — ретраить бессмысленно, сразу на запасную.
+        if _is_model_unavailable(e) and fallback != primary:
+            log.warning(
+                "Gemini %s недоступна (404), переключаюсь на %s: %s",
+                primary, fallback, e,
+            )
+            return await _client.aio.models.generate_content(
+                model=fallback, contents=contents, config=config_obj,
+            )
         if not _is_503(e):
             raise
         log.warning("Gemini %s 503, retrying after %ss: %s", primary, retry_delay, e)
