@@ -200,6 +200,17 @@ def _high_thinking_config():
     return None
 
 
+# Писатель на Pro + thinking high (определяется после _high_thinking_config).
+# Запасной _GENERATION_CONFIG (без thinking) используется при сбое Pro/thinking.
+_GENERATION_CONFIG_PRO = types.GenerateContentConfig(
+    system_instruction=SYSTEM_PROMPT,
+    temperature=0.95,
+    response_mime_type="application/json",
+    response_schema=RESPONSE_SCHEMA,
+    thinking_config=_high_thinking_config(),
+)
+
+
 def _is_503(exc: Exception) -> bool:
     """Проверяет 503/UNAVAILABLE/высокую нагрузку."""
     msg = str(exc).lower()
@@ -438,15 +449,26 @@ async def generate_posts(
         topic or "—",
     )
 
-    # --- ЭТАП 1: ДРАФТ (как раньше, с retry на битый JSON) ---
-    await _emit(on_progress, "🧠 Пишу черновик...")
+    # --- ЭТАП 1: ДРАФТ на Pro + thinking high (писатель должен ДУМАТЬ) ---
+    await _emit(on_progress, "🧠 Думаю над углом и пишу черновик...")
     try:
-        response = await _call_with_fallback(user_msg, _GENERATION_CONFIG)
+        response = await _call_with_fallback(
+            user_msg, _GENERATION_CONFIG_PRO,
+            model=_CHAT_MODEL, fallback_model=_MODEL_NAME,
+        )
         draft = json.loads(response.text)["variants"]
     except json.JSONDecodeError:
         log.warning("JSON decode failed, retrying with explicit reminder")
         retry_msg = user_msg + "\n\nВЕРНИ ТОЛЬКО ВАЛИДНЫЙ JSON БЕЗ ОБРАМЛЕНИЯ."
-        response = await _call_with_fallback(retry_msg, _GENERATION_CONFIG)
+        response = await _call_with_fallback(
+            retry_msg, _GENERATION_CONFIG_PRO,
+            model=_CHAT_MODEL, fallback_model=_MODEL_NAME,
+        )
+        draft = json.loads(response.text)["variants"]
+    except Exception as e:
+        # Pro/thinking + structured output могли отвалиться — пишем на Flash без thinking.
+        log.warning("Pro draft failed, degrading to Flash без thinking: %s", e)
+        response = await _call_with_fallback(user_msg, _GENERATION_CONFIG)
         draft = json.loads(response.text)["variants"]
 
     if not isinstance(draft, list) or len(draft) < 1:

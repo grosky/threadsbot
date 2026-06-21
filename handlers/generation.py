@@ -271,8 +271,9 @@ async def _do_free_generate(
         await state.clear()
         return
 
-    # Показываем только первый из 3 вариантов — остальные «остаются за подпиской»
-    v = variants[0]
+    # Показываем ЛУЧШИЙ из 3 по оценке зрителя (_interest_score) — остальные «за подпиской».
+    # Если оценок нет (деградация конвейера) — берём первый.
+    v = max(variants, key=lambda x: x.get("_interest_score", 0))
     raw_post = str(v.get("post", ""))
     safe_post = html.escape(raw_post)
     technique = html.escape(str(v.get("angle_technique", "—")))
