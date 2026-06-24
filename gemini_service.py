@@ -493,12 +493,10 @@ async def generate_posts(
     length: str = "long",
     on_progress: Callable[[str], Awaitable[None]] | None = None,
 ) -> list[dict]:
-    """3 варианта поста (Config B: дёшево на Flash).
+    """3 варианта поста — один Flash-вызов (как было изначально).
 
-    ДРАФТ (1 Flash-вызов рисует 3 поста) -> СУДЬЯ (1 Flash-вызов: оценка
-    интереса + лёгкая полировка всех 3). Без Pro, без цикла. Возврат прежний:
-    list[dict] с post/format/id/... + служебный _interest_score (хэндлеры
-    игнорируют лишнее; триал по нему выбирает лучший вариант).
+    Без судьи/конвейера/Pro: писатель-промт делает всю работу, пост отдаётся
+    как есть. Возврат: list[dict] с post/format/id/angle_technique.
 
     length="short" — каждый вариант ≤ 450 символов; "long" — развёрнутый.
     """
@@ -522,19 +520,14 @@ async def generate_posts(
     if not isinstance(draft, list) or len(draft) < 1:
         raise ValueError("Gemini вернул пустой список variants")
 
-    # --- ЭТАП 2: СУДЬЯ (оценка + полировка, 1 вызов) ---
-    await _emit(on_progress, "✨ Выбираю лучший и полирую...")
-    out = await judge_and_polish(draft, profile, length)
-    if not out:  # на всякий случай
-        out = [{**v, "_interest_score": 0} for v in draft if isinstance(v, dict)]
-    _normalize_variants_dashes(out)  # длинное тире -> дефис, гарантированно
+    # Без судьи/конвейера — отдаём черновик как есть (только нормализация тире).
+    _normalize_variants_dashes(draft)
 
     log.info(
-        "Generation готова (Config B): user=%s len=%s итоги(id,интерес)=%s",
-        profile.get("telegram_id"), length,
-        [(v.get("id"), v.get("_interest_score")) for v in out],
+        "Generation готова: user=%s len=%s вариантов=%s",
+        profile.get("telegram_id"), length, len(draft),
     )
-    return out
+    return draft
 
 
 async def analyze_profile(
