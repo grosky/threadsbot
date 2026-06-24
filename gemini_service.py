@@ -506,15 +506,26 @@ async def generate_posts(
         profile.get("telegram_id"), length, topic or "—",
     )
 
-    # --- ЭТАП 1: ДРАФТ на Flash (качество держит промт) ---
-    await _emit(on_progress, "🧠 Пишу 3 варианта...")
+    # --- Один вызов на Pro + thinking (писатель ДУМАЕТ над углом).
+    # Защитный фолбэк: если Pro/thinking+schema отвалится — пишем на Flash.
+    await _emit(on_progress, "🧠 Думаю над углом и пишу 3 варианта...")
     try:
-        response = await _call_with_fallback(user_msg, _GENERATION_CONFIG)
+        response = await _call_with_fallback(
+            user_msg, _GENERATION_CONFIG_PRO,
+            model=_CHAT_MODEL, fallback_model=_MODEL_NAME,
+        )
         draft = json.loads(response.text)["variants"]
     except json.JSONDecodeError:
         log.warning("JSON decode failed, retrying with explicit reminder")
         retry_msg = user_msg + "\n\nВЕРНИ ТОЛЬКО ВАЛИДНЫЙ JSON БЕЗ ОБРАМЛЕНИЯ."
-        response = await _call_with_fallback(retry_msg, _GENERATION_CONFIG)
+        response = await _call_with_fallback(
+            retry_msg, _GENERATION_CONFIG_PRO,
+            model=_CHAT_MODEL, fallback_model=_MODEL_NAME,
+        )
+        draft = json.loads(response.text)["variants"]
+    except Exception as e:
+        log.warning("Pro draft failed, degrading to Flash: %s", e)
+        response = await _call_with_fallback(user_msg, _GENERATION_CONFIG)
         draft = json.loads(response.text)["variants"]
 
     if not isinstance(draft, list) or len(draft) < 1:
