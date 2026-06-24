@@ -242,18 +242,10 @@ async def _do_free_generate(
         await state.clear()
         return
 
-    status_msg = await message.answer("🧠 Пишу и довожу до ума... ~40-60 секунд")
-
-    async def _progress(text: str) -> None:
-        try:
-            await status_msg.edit_text(text)
-        except Exception:
-            pass
+    status_msg = await message.answer("🧠 Думаю... ~15-20 секунд")
 
     try:
-        variants = await generate_posts(
-            profile, topic, length="long", on_progress=_progress,
-        )
+        variants = await generate_posts(profile, topic, length="long")
     except Exception as e:
         log.exception("Free generation failed for user %s", user_id)
         await status_msg.edit_text(
@@ -271,9 +263,8 @@ async def _do_free_generate(
         await state.clear()
         return
 
-    # Показываем ЛУЧШИЙ из 3 по оценке зрителя (_interest_score) — остальные «за подпиской».
-    # Если оценок нет (деградация конвейера) — берём первый.
-    v = max(variants, key=lambda x: x.get("_interest_score", 0))
+    # Показываем только первый из 3 вариантов — остальные «остаются за подпиской»
+    v = variants[0]
     raw_post = str(v.get("post", ""))
     safe_post = html.escape(raw_post)
     technique = html.escape(str(v.get("angle_technique", "—")))
@@ -406,18 +397,10 @@ async def _do_generate(
         await state.clear()
         return
 
-    status_msg = await message.answer("🧠 Пишу и довожу до ума... ~40-60 секунд")
-
-    async def _progress(text: str) -> None:
-        try:
-            await status_msg.edit_text(text)
-        except Exception:
-            pass
+    status_msg = await message.answer("🧠 Думаю... ~10-15 секунд")
 
     try:
-        variants = await generate_posts(
-            profile, topic, length=length, on_progress=_progress,
-        )
+        variants = await generate_posts(profile, topic, length=length)
     except Exception as e:
         log.exception("Generation failed for user %s", user_id)
         await status_msg.edit_text(
