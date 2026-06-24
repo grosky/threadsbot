@@ -180,7 +180,7 @@ _CHAT_MODEL = "gemini-3.1-pro-preview"
 
 # Quality-конвейер: цикл доработки до «зрителю интересно».
 _INTEREST_TARGET = 9   # порог оценки интереса зрителя (0-10), при котором выходим
-_MAX_REFINE_ITERS = 2  # макс. итераций цикла зритель->доработка
+_MAX_REFINE_ITERS = 1  # макс. итераций цикла зритель->доработка (экономия токенов)
 _STALL_PATIENCE = 1    # стоп, если балл не вырос столько итераций подряд
 
 
@@ -326,20 +326,20 @@ async def _safe(coro, fallback, label: str):
 
 
 async def audit_post(post: str, fmt: str, profile: dict, length: str) -> dict:
-    """Этап АУДИТ: критик оценивает пост по рубрике (модель Pro)."""
+    """Этап АУДИТ: критик оценивает пост по рубрике (Flash — экономия).
+
+    Writer на Pro+thinking, а проверка/правки на Flash: критика и реакция
+    зрителя на Flash почти не уступают Pro, но в ~10-15 раз дешевле.
+    """
     msg = build_audit_message(post, fmt, profile, length)
-    resp = await _call_with_fallback(
-        msg, _AUDIT_CONFIG, model=_CHAT_MODEL, fallback_model=_MODEL_NAME,
-    )
+    resp = await _call_with_fallback(msg, _AUDIT_CONFIG)
     return json.loads(resp.text)
 
 
 async def reader_react(post: str, profile: dict, length: str) -> dict:
-    """Этап ВЗГЛЯД ЗРИТЕЛЯ: живой читатель ленты оценивает интерес (модель Pro)."""
+    """Этап ВЗГЛЯД ЗРИТЕЛЯ: живой читатель ленты оценивает интерес (Flash)."""
     msg = build_reader_message(post, profile, length)
-    resp = await _call_with_fallback(
-        msg, _READER_CONFIG, model=_CHAT_MODEL, fallback_model=_MODEL_NAME,
-    )
+    resp = await _call_with_fallback(msg, _READER_CONFIG)
     return json.loads(resp.text)
 
 
@@ -422,18 +422,20 @@ async def refine_variant(variant: dict, profile: dict, length: str) -> dict:
         if stall > _STALL_PATIENCE:
             break
 
-    # Финальные ворота: критичные нарушения (выдуманные цифры / мораль) не должны остаться.
+    # Финальные ворота — ТОЛЬКО если в черновике был критичный флаг (экономия вызова).
+    # Чистый черновик не перепроверяем: revise по промту не добавляет фейков/морали.
     gate_fired = False
-    final_audit = await _safe(
-        audit_post(best_post, fmt, profile, length), dict(_NEUTRAL_AUDIT), "audit",
-    )
-    if final_audit.get("fabricated_stats") or final_audit.get("moral_ending"):
-        gate_fired = True
-        fixed = await _safe(
-            revise_post(best_post, fmt, final_audit, reaction, profile, length),
-            {"post": best_post}, "revise",
+    if critical:
+        final_audit = await _safe(
+            audit_post(best_post, fmt, profile, length), dict(_NEUTRAL_AUDIT), "audit",
         )
-        best_post = (fixed.get("post") or "").strip() or best_post
+        if final_audit.get("fabricated_stats") or final_audit.get("moral_ending"):
+            gate_fired = True
+            fixed = await _safe(
+                revise_post(best_post, fmt, final_audit, reaction, profile, length),
+                {"post": best_post}, "revise",
+            )
+            best_post = (fixed.get("post") or "").strip() or best_post
 
     log.info(
         "refine id=%s fmt=%s: интерес %s->%s/10, итераций=%s, финальные_ворота=%s",
