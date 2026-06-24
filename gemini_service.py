@@ -28,6 +28,8 @@ from prompts import (
     PROFILE_PACKAGING_NAMES_SCHEMA,
     POST_AUDIT_PROMPT,
     POST_AUDIT_SCHEMA,
+    POST_JUDGE_PROMPT,
+    POST_JUDGE_SCHEMA,
     POST_REVISE_PROMPT,
     POST_REVISE_SCHEMA,
     PROFILE_PACKAGING_PINNED_SCHEMA,
@@ -51,6 +53,7 @@ from prompts import (
     build_product_builder_message,
     build_profile_packaging_message,
     build_audit_message,
+    build_judge_message,
     build_partner_chat_system,
     build_reader_message,
     build_revise_message,
@@ -148,6 +151,14 @@ _REVISE_CONFIG = types.GenerateContentConfig(
     temperature=0.85,  # креативный рерайт
     response_mime_type="application/json",
     response_schema=POST_REVISE_SCHEMA,
+)
+
+# Config B: судья — оценка интереса + лёгкая полировка 3 постов за 1 вызов (Flash).
+_JUDGE_CONFIG = types.GenerateContentConfig(
+    system_instruction=POST_JUDGE_PROMPT,
+    temperature=0.7,
+    response_mime_type="application/json",
+    response_schema=POST_JUDGE_SCHEMA,
 )
 
 
@@ -444,76 +455,85 @@ async def refine_variant(variant: dict, profile: dict, length: str) -> dict:
     return {**variant, "post": best_post, "_interest_score": best_score, "_iterations": iterations}
 
 
+async def judge_and_polish(
+    draft: list[dict], profile: dict, length: str
+) -> list[dict]:
+    """Config B, этап 2: судья (Flash) за 1 вызов оценивает интерес и слегка
+    полирует каждый из 3 черновиков.
+
+    Возвращает draft-варианты с обновлённым post и _interest_score.
+    При сбое деградирует к исходным черновикам (с нейтральным баллом).
+    """
+    try:
+        msg = build_judge_message(draft, profile, length)
+        resp = await _call_with_fallback(msg, _JUDGE_CONFIG)
+        judged = json.loads(resp.text).get("variants", [])
+    except Exception as e:  # noqa: BLE001 — деградация к черновикам
+        log.warning("judge_and_polish failed, returning drafts: %s", e)
+        return [{**v, "_interest_score": 0} for v in draft if isinstance(v, dict)]
+
+    by_id = {j.get("id"): j for j in judged if isinstance(j, dict)}
+    out = []
+    for v in draft:
+        if not isinstance(v, dict):
+            continue
+        j = by_id.get(v.get("id")) or {}
+        polished = (j.get("post") or "").strip() or str(v.get("post") or "")
+        out.append({
+            **v,
+            "post": polished,
+            "_interest_score": int(j.get("interest_score", 0) or 0),
+        })
+    return out
+
+
 async def generate_posts(
     profile: dict,
     topic: str | None = None,
     length: str = "long",
     on_progress: Callable[[str], Awaitable[None]] | None = None,
 ) -> list[dict]:
-    """3 варианта поста, прогнанных через quality-конвейер.
+    """3 варианта поста (Config B: дёшево на Flash).
 
-    ДРАФТ (Gemini рисует 3 архетипа) -> для КАЖДОГО варианта конкурентно
-    АУДИТ + ВЗГЛЯД ЗРИТЕЛЯ -> цикл доработки, пока интерес зрителя < порога.
-    Формат возврата прежний: list[dict] с ключами post/format/id/... (плюс
-    служебные _interest_score/_iterations, которые хэндлеры игнорируют).
+    ДРАФТ (1 Flash-вызов рисует 3 поста) -> СУДЬЯ (1 Flash-вызов: оценка
+    интереса + лёгкая полировка всех 3). Без Pro, без цикла. Возврат прежний:
+    list[dict] с post/format/id/... + служебный _interest_score (хэндлеры
+    игнорируют лишнее; триал по нему выбирает лучший вариант).
 
-    on_progress — опц. async-колбэк для вех прогресса (конвейер долгий).
     length="short" — каждый вариант ≤ 450 символов; "long" — развёрнутый.
     """
     user_msg = build_user_message(profile, topic, length=length)
     log.info(
         "Generating posts: user_id=%s length=%s topic=%s",
-        profile.get("telegram_id"),
-        length,
-        topic or "—",
+        profile.get("telegram_id"), length, topic or "—",
     )
 
-    # --- ЭТАП 1: ДРАФТ на Pro + thinking high (писатель должен ДУМАТЬ) ---
-    await _emit(on_progress, "🧠 Думаю над углом и пишу черновик...")
+    # --- ЭТАП 1: ДРАФТ на Flash (качество держит промт) ---
+    await _emit(on_progress, "🧠 Пишу 3 варианта...")
     try:
-        response = await _call_with_fallback(
-            user_msg, _GENERATION_CONFIG_PRO,
-            model=_CHAT_MODEL, fallback_model=_MODEL_NAME,
-        )
+        response = await _call_with_fallback(user_msg, _GENERATION_CONFIG)
         draft = json.loads(response.text)["variants"]
     except json.JSONDecodeError:
         log.warning("JSON decode failed, retrying with explicit reminder")
         retry_msg = user_msg + "\n\nВЕРНИ ТОЛЬКО ВАЛИДНЫЙ JSON БЕЗ ОБРАМЛЕНИЯ."
-        response = await _call_with_fallback(
-            retry_msg, _GENERATION_CONFIG_PRO,
-            model=_CHAT_MODEL, fallback_model=_MODEL_NAME,
-        )
-        draft = json.loads(response.text)["variants"]
-    except Exception as e:
-        # Pro/thinking + structured output могли отвалиться — пишем на Flash без thinking.
-        log.warning("Pro draft failed, degrading to Flash без thinking: %s", e)
-        response = await _call_with_fallback(user_msg, _GENERATION_CONFIG)
+        response = await _call_with_fallback(retry_msg, _GENERATION_CONFIG)
         draft = json.loads(response.text)["variants"]
 
     if not isinstance(draft, list) or len(draft) < 1:
         raise ValueError("Gemini вернул пустой список variants")
 
-    # --- ЭТАПЫ 2-5: конкурентный refine всех вариантов ---
-    await _emit(on_progress, "🔍 Проверяю по чек-листу и читаю глазами зрителя...")
-    try:
-        refined = await asyncio.gather(
-            *[refine_variant(v, profile, length) for v in draft],
-            return_exceptions=True,
-        )
-    except Exception as e:  # noqa: BLE001 — тотальная деградация к черновику
-        log.warning("refine pipeline failed entirely, returning draft: %s", e)
-        return _normalize_variants_dashes(draft)
-
-    # Поэлементная деградация: упавший вариант заменяем его черновиком.
-    out = [r if isinstance(r, dict) else v for v, r in zip(draft, refined)]
+    # --- ЭТАП 2: СУДЬЯ (оценка + полировка, 1 вызов) ---
+    await _emit(on_progress, "✨ Выбираю лучший и полирую...")
+    out = await judge_and_polish(draft, profile, length)
+    if not out:  # на всякий случай
+        out = [{**v, "_interest_score": 0} for v in draft if isinstance(v, dict)]
     _normalize_variants_dashes(out)  # длинное тире -> дефис, гарантированно
 
     log.info(
-        "Pipeline готов: user=%s len=%s итоги(id,интерес,итер)=%s",
+        "Generation готова (Config B): user=%s len=%s итоги(id,интерес)=%s",
         profile.get("telegram_id"), length,
-        [(v.get("id"), v.get("_interest_score"), v.get("_iterations")) for v in out],
+        [(v.get("id"), v.get("_interest_score")) for v in out],
     )
-    await _emit(on_progress, "✨ Довожу до 10/10...")
     return out
 
 

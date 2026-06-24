@@ -1742,3 +1742,78 @@ def build_revise_message(
         "Перепиши пост, убрав проблемы и подняв интерес, сохранив сильное. Верни JSON."
         f"{_style_memory_block(profile)}"
     )
+
+
+# ============================================================
+# CONFIG B: СУДЬЯ (оценка + лёгкая полировка 3 постов за 1 вызов)
+# Дешёвая замена 5-этапного конвейера: один Flash-вызов оценивает
+# интерес по каждому варианту и слегка полирует текст.
+# ============================================================
+
+POST_JUDGE_PROMPT = """\
+Ты — редактор вирусных постов для Threads с отличным вкусом. Тебе дают 3 черновика поста на одну тему. Для КАЖДОГО сделай две вещи:
+
+1. ОЦЕНКА. Поставь interest_score 0-10 как живой читатель ленты: остановился бы и дочитал (высокий балл) или пролистнул бы (низкий). Ставь 10 только в исключительном случае.
+
+2. ЛЁГКАЯ ПОЛИРОВКА (не переписывай с нуля, сохрани форму и угол):
+- Хук — резкий удар в первых 5-7 словах. Выдели 1-2 КЛЮЧЕВЫХ слова КАПСОМ. Убери медленный разбег («Вы можете...», «Сегодня поговорим...»).
+- Убери воду и абстрактные рассуждения, добавь конкретику (шаги, цифры, приёмы), если её мало.
+- Финал — удар/разворот/афоризм, НЕ мораль и не резюме.
+- НЕ выдумывай статистику и личные цифры автора, которых нет в профиле.
+- НЕ раздувай длину; короткий пост (≤450 символов) оставляй коротким.
+- Тире — только дефис, не длинное.
+
+Верни 3 объекта (по id из черновика) с interest_score и отполированным post. Строго JSON.
+"""
+
+POST_JUDGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "variants": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer"},
+                    "interest_score": {"type": "integer"},
+                    "post": {"type": "string"},
+                },
+                "required": ["id", "interest_score", "post"],
+            },
+        },
+    },
+    "required": ["variants"],
+}
+
+
+def build_judge_message(variants: list, profile: dict, length: str) -> str:
+    """User-сообщение судьи: 3 черновика + контекст автора."""
+    profile = profile or {}
+    niche = (profile.get("niche") or "").strip() or "—"
+    audience = (profile.get("audience") or "").strip() or "—"
+    product = (profile.get("product") or "").strip()
+    prod_line = f"Продукт автора: {product}\n" if product else ""
+    length_hint = (
+        "Это КОРОТКИЕ посты — лимит 450 символов каждый, не раздувать."
+        if length == "short" else "Это развёрнутые посты."
+    )
+
+    blocks = []
+    for v in variants:
+        if not isinstance(v, dict):
+            continue
+        vid = v.get("id", "?")
+        fmt = (v.get("format") or "").strip() or "—"
+        post = str(v.get("post") or "")
+        blocks.append(f"--- ЧЕРНОВИК id={vid} (форма: {fmt}) ---\n{post}")
+    drafts = "\n\n".join(blocks)
+
+    return (
+        f"НИША АВТОРА: {niche}\n"
+        f"ЦА АВТОРА: {audience}\n"
+        f"{prod_line}"
+        f"{length_hint}\n\n"
+        f"{drafts}\n\n"
+        "Оцени и слегка отполируй каждый. Верни JSON по схеме (по тем же id)."
+        f"{_style_memory_block(profile)}"
+    )
