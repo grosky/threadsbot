@@ -12,6 +12,8 @@ from aiogram.types import Message
 from config import config
 from database import (
     add_partner_link,
+    create_user,
+    extend_subscription_days,
     find_partner_by_source,
     find_user_by_username,
     get_ab_metrics,
@@ -236,6 +238,73 @@ async def cmd_make_partner(
         f"<b>Ссылка:</b>\n<code>{link}</code>\n\n"
         f"{notify_status}"
     )
+
+
+# ---------- /grant — ручная выдача/продление подписки ----------
+
+@router.message(Command("grant"))
+async def cmd_grant(message: Message, command: CommandObject, bot: Bot) -> None:
+    """Выдать/продлить подписку юзеру вручную.
+
+    Нужно, когда оплата прошла на стороне Tribute, но вебхук не долетел
+    (например бот/хостинг лежал). Использование:
+    /grant <@username | telegram_id> [дней=30]
+    """
+    if not _is_admin(message.from_user.id):
+        return
+
+    args = (command.args or "").split()
+    if not args:
+        await message.answer(
+            "🎟 <b>Выдать подписку вручную</b>\n\n"
+            "Использование: <code>/grant &lt;@username | telegram_id&gt; [дней]</code>\n"
+            "Примеры:\n"
+            "<code>/grant @ivan 30</code>\n"
+            "<code>/grant 123456789 30</code>\n\n"
+            "Дней по умолчанию — 30. Продлевает от конца текущей подписки, "
+            "если она ещё активна."
+        )
+        return
+
+    target = args[0]
+    days = 30
+    if len(args) > 1:
+        try:
+            days = int(args[1])
+        except ValueError:
+            await message.answer("Второй аргумент (дни) должен быть числом.")
+            return
+
+    # Резолв юзера: @username или числовой telegram_id (как в /make_partner)
+    if target.startswith("@") or not target.lstrip("-").isdigit():
+        user = await find_user_by_username(target)
+        if not user:
+            await message.answer(
+                f"❌ Юзер «{target}» не найден в базе по username.\n"
+                "Дай его telegram_id числом: <code>/grant &lt;id&gt; &lt;дней&gt;</code>."
+            )
+            return
+        user_id = int(user["telegram_id"])
+    else:
+        user_id = int(target)
+        # на случай если юзер ещё не стартовал бота — создаём пустую запись
+        await create_user(user_id, username=None, first_name="")
+
+    new_expires = await extend_subscription_days(user_id, days)
+
+    await message.answer(
+        f"✅ Выдал <b>{days} дн.</b> юзеру <code>{user_id}</code>.\n"
+        f"Подписка действует до <b>{new_expires.strftime('%d.%m.%Y')}</b>."
+    )
+    try:
+        await bot.send_message(
+            user_id,
+            "💎 <b>Подписка активирована!</b>\n\n"
+            f"Действует до: <b>{new_expires.strftime('%d.%m.%Y')}</b>.\n\n"
+            "Жми /menu чтобы продолжить.",
+        )
+    except Exception as e:
+        log.warning("grant: failed to notify user %s: %s", user_id, e)
 
 
 # ---------- /refresh_trends ----------
